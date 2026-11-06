@@ -133,7 +133,67 @@ FROM UNNEST(
 こちらなら、対象期間が長くなっても月を1行ずつ追加する必要がありません。*/
 
 
+/*日替わりSQL｜顧客別の購入間隔分析
+使用するテーブル
+  training16_customers
+  training16_orders
 
+顧客ごとの購入履歴を時系列に並べ、前回の購入日から何日経過したかを求めてください。
+  status = 'completed' の注文のみを対象とする。
+  顧客ごとに order_date の昇順で並べる。
+  顧客ごとに購入が何回目かを purchase_number として表示する。
+  前回の購入日を previous_order_date として表示する。
+  前回購入日から今回購入日までの日数を days_since_previous として表示する。
+  顧客の region も表示してregion がNULLの場合は 'Unknown' に置き換える。
+  初回購入については、前回購入日と経過日数をNULLとする。
+  同じ顧客が同じ日に複数回注文した場合も、それぞれ別の購入としてカウントしてください。購入順序は order_date、同日なら order_id の昇順とします。
+
+出力カラム
+  customer_id：顧客ID
+  region：地域
+  order_id：注文ID
+  order_date：注文日
+  purchase_number：何回目の購入か
+  previous_order_date：前回購入日
+  days_since_previous：前回購入からの日数
+*/
+WITH extract_order AS (
+  SELECT
+    o.customer_id,
+    IFNULL(c.region, 'Unknown') AS region,
+    o.order_id,
+    o.order_date
+  FROM `resonant-tract-508812-p9.sql_training.training16_orders` AS o
+  LEFT OUTER JOIN `resonant-tract-508812-p9.sql_training.training16_customers` AS c
+    ON o.customer_id = c.customer_id
+  WHERE o.status = 'completed'
+),
+customer_order_data AS (
+  SELECT
+    customer_id,
+    region,
+    order_id,
+    order_date,
+    ROW_NUMBER() OVER (
+      PARTITION BY customer_id
+      ORDER BY order_date ASC, order_id ASC
+    ) AS purchase_number,
+    LAG(order_date) OVER (
+      PARTITION BY customer_id
+      ORDER BY order_date ASC, order_id ASC
+    ) AS previous_order_date
+  FROM extract_order
+)
+SELECT
+  customer_id,
+  region,
+  order_id,
+  order_date,
+  purchase_number,
+  previous_order_date,
+  DATE_DIFF(order_date, previous_order_date, DAY) AS days_since_previous
+FROM customer_order_data
+ORDER BY customer_id ASC, order_date ASC, order_id ASC;
 
 
 
