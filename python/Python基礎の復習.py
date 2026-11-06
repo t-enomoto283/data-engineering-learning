@@ -24,21 +24,16 @@ orders = [
 #     "C003": 15000
 # }
 
-for nest in orders:
-    print(nest)
+def aggregate_sales(order):
+    res = {}
+    for o in order:
+        if o["status"] == "completed":
+            cid = o["customer_id"]
+            if cid not in res:
+                res[cid] = 0
+            res[cid] += o["amount"]
+    return res
 
-for o in orders:
-    print(o["order_id"], o["customer_id"], o["amount"], o["status"])
+aggregate_sales(orders)
 
-for youso in orders:
-    for key, val in youso.items():
-        print(key, val)
-
-
-for key in {'one': 1, 'two': 2}:
-  print(key)
-
-xvec = [10, 20, 30]
-yvec = [7, 5, 3]
-sum(x*y for x, y in zip(xvec, yvec))  # 内積
 
