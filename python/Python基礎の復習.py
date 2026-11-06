@@ -34,3 +34,11 @@ for youso in orders:
     for key, val in youso.items():
         print(key, val)
 
+
+for key in {'one': 1, 'two': 2}:
+  print(key)
+
+xvec = [10, 20, 30]
+yvec = [7, 5, 3]
+sum(x*y for x, y in zip(xvec, yvec))  # 内積
+
