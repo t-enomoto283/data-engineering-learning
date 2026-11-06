@@ -24,6 +24,13 @@ orders = [
 #     "C003": 15000
 # }
 
+for nest in orders:
+    print(nest)
 
+for o in orders:
+    print(o["order_id"], o["customer_id"], o["amount"], o["status"])
 
+for youso in orders:
+    for key, val in youso.items():
+        print(key, val)
 
