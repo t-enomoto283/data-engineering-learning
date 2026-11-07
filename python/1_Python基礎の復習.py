@@ -342,13 +342,44 @@ orders = [
 ]
 
 # 演習要件として今回は、次の2つの関数を作成してください。
-def validate_order(order):
-    # 注文データを検証する関数
-    pass
+def validate_order(item):
+    """注文データを検証する関数"""
+    if item.get("customer_id") is None or item.get("amount") is None:
+        return {"valid": False, "reason": "missing"}
+    elif not isinstance(item["amount"], (int, float)) or isinstance(item["amount"], bool):
+        return {"valid": False, "reason": "invalid_type"}
+    elif item["amount"] < 0:
+        return {"valid": False, "reason": "negative_amount"}
+    else:
+        return {"valid": True, "reason": None}
 
-def aggregate_sales(orders, target_status="completed"):
-    # 検証結果を使って売上を集計する関数
-    pass
+def aggregate_sales(items, target_status="completed"):
+    """検証結果を使って売上を集計する関数"""
+    missing_count = 0
+    invalid_type_count = 0
+    negative_amount_count = 0
+    values = {}
+    for item in items:
+        if item["status"] == target_status:
+            valid_results = validate_order(item)
+            if valid_results.get("reason") == "missing":
+                missing_count += 1
+            elif valid_results.get("reason") == "invalid_type":
+                invalid_type_count += 1
+            elif valid_results.get("reason") == "negative_amount":
+                negative_amount_count += 1
+            elif valid_results["valid"] is True:
+                customer_id = item["customer_id"]
+                if customer_id not in values:
+                    values[customer_id] = 0
+                values[customer_id] += item["amount"]
+    errors = {
+        "missing_count": missing_count,
+        "invalid_type_count": invalid_type_count,
+        "negative_amount_count": negative_amount_count
+    }
+    result = {"sales_by_customer": values, "error_counts": errors}
+    return result
 
 # 要件①：validate_order() の作成
 # 1件の注文データを受け取り、次の順序で検証してください。
@@ -412,6 +443,156 @@ print(aggregate_sales(orders, "pending"))
 #   検証結果を返す：valid / reason
 #     ↓
 #   aggregate_sales() が結果を処理：正常なら集計、不正ならエラー件数を更新
+
+
+### STEP 1-5｜例外処理とファイル操作の基礎
+# 今回は、PythonでCSVファイルを読み込む際の「例外処理（try / except）」を学びます。
+# データエンジニアリングでは、外部ファイルの読み込み時に、ファイルが存在しない、データ形式が不正などの問題が発生します。
+#
+# 今回使うPythonの知識
+# ① try / except
+# Pythonでは、処理中に例外が発生すると、通常はその時点で処理が中断されます。
+# try / except を使うと、特定の例外を捕捉して適切に処理できます。
+try:
+    number = int("abc")
+except ValueError:
+    print("数値に変換できません")
+# int("abc") では ValueError が発生しますが、except ValueError で捕捉しています。
+#
+# ② 複数の例外を捕捉する
+def divide(a, b):
+    try:
+        return a / b
+    except ZeroDivisionError:
+        return "0では割れません"
+    except TypeError:
+        return "数値を指定してください"
+# 例外の種類に応じて、異なる処理を実行できます。
+# 今回も、ファイルの読み込みで発生する例外を区別します。
+#
+# ③ open() と with
+# Python標準の open() を使うと、ファイルを読み込めます。
+with open("sample.txt", "r", encoding="utf-8") as file:
+    content = file.read()
+print(content)
+# "r"：読み込みモード
+# encoding="utf-8"：文字コードを指定
+# with：処理が終了したらファイルを自動的に閉じる
+#
+# ④ csv.DictReader
+# CSVファイルを辞書形式で読み込むには、標準ライブラリの csv を使います。
+# 例えば、次のCSVがあるとします。
+#   customer_id,amount
+#   C001,12000
+#   C002,8000
+# 読み込みコード：
+import csv
+with open("sample.csv", "r", encoding="utf-8") as file:
+    reader = csv.DictReader(file)
+    rows = list(reader)
+print(rows)
+# 実行結果：
+# [
+#     {"customer_id": "C001", "amount": "12000"},
+#     {"customer_id": "C002", "amount": "8000"}
+# ]
+# 重要なのは、csv.DictReader で読み込んだ値は基本的に文字列になることです。
+# そのため、数値として扱うには int() や float() で変換する必要があります。
+#
+# ⑤ raiseによる例外の発生
+# raise を使うと、自分で例外を発生させることができます。
+def check_amount(amount):
+    if amount < 0:
+        raise ValueError("金額は0以上である必要があります")
+    return amount
+# 今回は、CSVに必要な列が存在しない場合に raise ValueError(...) を使用します。
+
+# 演習用データ：
+# order_id,customer_id,amount,status
+# 1,C001,12000,completed
+# 2,C002,8000,cancelled
+# 3,C001,15000,completed
+# 4,C003,6000,completed
+# この.pyファイルと同じディレクトリに、上記内容の orders.csv を設置済。
+# 今回はCSVを読み込む処理が対象なので、pandasは使用しません。
+
+# 演習要件として次の関数を作成してください。
+def load_orders_csv(file_path):
+    pass
+    ...
+
+# 要件①：CSVファイルの読み込み
+# file_path で指定されたCSVファイルを、csv.DictReader を使用して読み込んでください。
+# 読み込んだデータは、辞書のリストに変換します。
+
+# 要件②：必須列の検証
+# CSVに以下の4列が存在するかを検証してください。
+# required_columns = [
+#     "order_id",
+#     "customer_id",
+#     "amount",
+#     "status"
+# ]
+# 1列でも存在しない場合は、ValueError を発生させてください。
+# 今回は、列の存在確認だけを対象とします。列の順序は問いません。余分な列が存在していても問題ありません。
+
+# 要件③：amountの数値変換
+# CSVから読み込んだ amount を整数（int）に変換してください。
+# 変換できない値があった場合は、その ValueError を呼び出し側に伝えてください。
+# 今回は不正な行のスキップやエラー件数の集計は行いません。
+
+# 要件④：例外処理
+# 関数の内部では、次の例外を捕捉してください。
+#   例外                発生する状況                            処理
+#   FileNotFoundError  指定したCSVファイルが存在しない            "ファイルが存在しません" と表示して None を返す
+#   ValueError         必須列が不足、または金額が整数に変換できない  "CSVデータが不正です" と表示したうえで、raise で例外を再送出する
+# ここでの raise は、捕捉した例外を呼び出し側へそのまま伝えるために使用します。
+
+# テストケース
+# ケース1：正常なCSVファイル
+result = load_orders_csv("orders.csv")
+print(result)
+# 期待結果：
+# [
+#     {"order_id": "1", "customer_id": "C001", "amount": 12000, "status": "completed"},
+#     {"order_id": "2", "customer_id": "C002", "amount": 8000, "status": "cancelled"},
+#     {"order_id": "3", "customer_id": "C001", "amount": 15000, "status": "completed"},
+#     {"order_id": "4", "customer_id": "C003", "amount": 6000, "status": "completed"}
+# ]
+#
+# ケース2：存在しないCSVファイル
+result = load_orders_csv("not_found.csv")
+print(result)
+# 期待結果：
+# ファイルが存在しません
+# None
+
+# 実装のヒント
+# CSVの列名は、csv.DictReader の fieldnames で取得できます。
+reader = csv.DictReader(file)
+print(reader.fieldnames)
+#
+# また、必須列がすべて存在するかは、次のような考え方で確認できます。
+all(column in reader.fieldnames for column in required_columns)
+# all() は、すべての条件が True の場合に True を返します。
+#
+# 例外の再送出は、次の構造を参考にしてください。
+try:
+    # ファイル読み込みやデータ変換
+    ...
+except FileNotFoundError:
+    # ファイルが存在しない場合
+    ...
+except ValueError:
+    # データ不正の場合
+    raise
+
+
+
+
+
+
+
 
 
 
