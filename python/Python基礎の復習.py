@@ -169,8 +169,30 @@ orders = [
 
 # 演習要件として次の関数を作成してください。
 def aggregate_sales(orders, target_status="completed"):
-    pass
-    # ここに処理を書く
+    missing_count = 0
+    invalid_type_count = 0
+    negative_amount_count = 0
+    values = {}
+    for item in orders:
+        if item["status"] == target_status:
+            if item.get("customer_id") is None or item.get("amount") is None:
+                missing_count += 1
+            elif not isinstance(item["amount"], (int, float)) or isinstance(item["amount"], bool):
+                invalid_type_count += 1
+            elif item["amount"] < 0:
+                negative_amount_count += 1
+            else:
+                customer_id = item["customer_id"]
+                if customer_id not in values:
+                    values[customer_id] = 0
+                values[customer_id] += item["amount"]
+    errors = {
+        "missing_count": missing_count,
+        "invalid_type_count": invalid_type_count,
+        "negative_amount_count": negative_amount_count
+    }
+    result = {"sales_by_customer": values, "error_counts": errors}
+    return result
 
 # 今回使うPythonの知識
 # isinstance() による型チェック
@@ -247,5 +269,153 @@ print(result)
 #         "negative_amount_count": 0
 #     }
 # }
+
+
+### STEP 1-4｜関数の分割・再利用と処理結果の管理
+# これまでは、1つの aggregate_sales() 関数の中に、データの検証と売上集計の両方を書いていました。
+# しかし、実務のデータパイプラインでは、処理を役割ごとに分けることが重要で、今回は次の3点を学びます。
+#   1. 関数の分割：データ検証と売上集計を別々の関数にする。
+#   2. 戻り値の活用：検証関数が返した結果を、別の関数で利用する。
+#   3. 再利用性：同じ検証処理を複数のデータに対して使えるようにする。
+# 今回もpandasは使わず、Pythonの標準機能だけで実装します。
+#
+# 今回使うPythonの知識
+# ① 関数から複数の値を返す
+# Pythonでは、return で複数の値を返せます。
+def calculate(a, b):
+    total = a + b
+    difference = a - b
+    return total, difference
+
+result1, result2 = calculate(10, 3)
+print(result1)  # 13
+print(result2)  # 7
+# 実際には、複数の値がタプルとして返されています。
+result = calculate(10, 3)
+print(result)  # (13, 7)
+#
+# ② 関数の戻り値を別の関数で利用する
+def double_number(number):
+    return number * 2
+
+def add_ten(number):
+    doubled = double_number(number)
+    return doubled + 10
+
+print(add_ten(5))  # 20
+# add_ten() の内部で double_number() を呼び出しています。
+# このように関数を組み合わせることで、処理を役割ごとに分けられます。
+#
+# ③ continue によるループのスキップ
+numbers = [10, -5, 20, -3, 30]
+for number in numbers:
+    if number < 0:
+        continue
+    print(number, end=' ')  # 10 20 30
+# continue が実行されると、その回のループの残りの処理を飛ばして、次の要素に進みます。
+# データ処理では、不正なレコードを除外するときに便利です。
+#
+# ④ 辞書型の戻り値を利用する
+def check_amount(amount):
+    if amount < 0:
+        return {"valid": False, "reason": "negative"}
+    return {"valid": True, "reason": None}
+
+result = check_amount(-100)
+print(result["valid"])   # False
+print(result["reason"])  # negative
+# 今回の演習では、これと似た考え方で、検証結果を集計関数へ渡します。
+
+# 演習用データ：
+orders = [
+    {"order_id": 1, "customer_id": "C001", "amount": 12000, "status": "completed"},
+    {"order_id": 2, "customer_id": "C002", "amount": 8000, "status": "cancelled"},
+    {"order_id": 3, "customer_id": "C001", "amount": 15000, "status": "completed"},
+    {"order_id": 4, "customer_id": "C003", "amount": None, "status": "completed"},
+    {"order_id": 5, "customer_id": "C002", "amount": "10000", "status": "completed"},
+    {"order_id": 6, "customer_id": None, "amount": 9000, "status": "completed"},
+    {"order_id": 7, "customer_id": "C003", "amount": -5000, "status": "completed"},
+    {"order_id": 8, "customer_id": "C004", "amount": 5000, "status": "pending"},
+    {"order_id": 9, "customer_id": "C001", "status": "completed"},
+    {"order_id": 10, "customer_id": "C005", "amount": "abc", "status": "completed"},
+    {"order_id": 11, "customer_id": "C003", "amount": 6000, "status": "completed"},
+]
+
+# 演習要件として今回は、次の2つの関数を作成してください。
+def validate_order(order):
+    # 注文データを検証する関数
+    pass
+
+def aggregate_sales(orders, target_status="completed"):
+    # 検証結果を使って売上を集計する関数
+    pass
+
+# 要件①：validate_order() の作成
+# 1件の注文データを受け取り、次の順序で検証してください。
+#   検証順序  条件                              reason
+#   1       customer_id または amount が欠損    "missing"
+#   2       amount がint・float以外、またはbool  "invalid_type"
+#   3       amount が負数                      "negative_amount"
+#   4       すべて正常                          None
+#
+# 欠損には、キー自体が存在しない場合も含めます。空文字列・NaN・無限大は今回も検証対象外です。
+# 戻り値は次の構造にしてください。
+# 正常な場合：
+# {"valid": True, "reason": None}
+#
+# 不正な場合（例：金額が負数）：
+# {"valid": False, "reason": "negative_amount"}
+
+# 要件②：aggregate_sales() の作成
+# aggregate_sales() は、次の順序で処理してください。
+  # 1. target_status に一致する注文だけを対象とする。
+  # 2. 対象の注文を validate_order() に渡して検証する。
+  # 3. 不正な注文は、reason に対応するエラー件数を1増やし、売上集計から除外する。
+  # 4. 正常な注文は、customer_id ごとに amount を合計する。
+# ステータスが一致しない注文は、検証対象にもエラー件数にも含めません。
+# なお、今回は try / except の使用は必須ではありません。
+
+# 期待する実行結果
+# ケース1：completed注文
+print(aggregate_sales(orders))
+# {
+#     "sales_by_customer": {
+#         "C001": 27000,
+#         "C003": 6000
+#     },
+#     "error_counts": {
+#         "missing_count": 3,
+#         "invalid_type_count": 2,
+#         "negative_amount_count": 1
+#     }
+# }
+#
+# ケース2：pending注文
+print(aggregate_sales(orders, "pending"))
+# {
+#     "sales_by_customer": {
+#         "C004": 5000
+#     },
+#     "error_counts": {
+#         "missing_count": 0,
+#         "invalid_type_count": 0,
+#         "negative_amount_count": 0
+#     }
+# }
+
+# 今回のポイント
+# 検証処理を集計処理から独立させることが最も重要です。
+#   aggregate_sales()：対象ステータスの絞り込み・集計管理
+#     ↓
+#   validate_order()：注文1件の品質チェック
+#     ↓
+#   検証結果を返す：valid / reason
+#     ↓
+#   aggregate_sales() が結果を処理：正常なら集計、不正ならエラー件数を更新
+
+
+
+
+
 
 
