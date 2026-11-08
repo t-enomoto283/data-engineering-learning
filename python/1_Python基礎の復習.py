@@ -673,18 +673,92 @@ def process(value):
 
 # 演習要件として今回は、これまで作成した次の3つの関数を再利用します。
 def load_orders_csv(file_path):
-    ...
+    """CSV読み込み関数"""
+    required_columns = ["order_id", "customer_id", "amount", "status"]
+    result = []
+    import csv
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            dict_csv = csv.DictReader(file)
+            if not dict_csv.fieldnames or not all(column in dict_csv.fieldnames for column in required_columns):
+                raise ValueError
+            for row in dict_csv:
+                row["amount"] = int(row["amount"])
+                result.append(row)
+    except FileNotFoundError:
+        print("ファイルが存在しません")
+        return None
+    except ValueError:
+        print("CSVデータが不正です")
+        raise
+    return result
 
 def validate_order(item):
-    ...
+    """注文データを検証する関数"""
+    if item.get("customer_id") is None or item.get("amount") is None:
+        return {"valid": False, "reason": "missing"}
+    elif not isinstance(item["amount"], (int, float)) or isinstance(item["amount"], bool):
+        return {"valid": False, "reason": "invalid_type"}
+    elif item["amount"] < 0:
+        return {"valid": False, "reason": "negative_amount"}
+    else:
+        return {"valid": True, "reason": None}
 
 def aggregate_sales(items, target_status="completed"):
-    ...
+    """検証結果を使って売上を集計する関数"""
+    missing_count = 0
+    invalid_type_count = 0
+    negative_amount_count = 0
+    values = {}
+    for dict_row in items:
+        if dict_row["status"] == target_status:
+            valid_results = validate_order(dict_row)
+            if valid_results.get("reason") == "missing":
+                missing_count += 1
+            elif valid_results.get("reason") == "invalid_type":
+                invalid_type_count += 1
+            elif valid_results.get("reason") == "negative_amount":
+                negative_amount_count += 1
+            elif valid_results["valid"] is True:
+                customer_id = dict_row["customer_id"]
+                if customer_id not in values:
+                    values[customer_id] = 0
+                values[customer_id] += dict_row["amount"]
+    errors = {
+        "missing_count": missing_count,
+        "invalid_type_count": invalid_type_count,
+        "negative_amount_count": negative_amount_count
+    }
+    result = {"sales_by_customer": values, "error_counts": errors}
+    return result
 
 # 上の3つはSTEP 1-4、1-5で完成させた関数を利用して構いません。
 # 今回、新たに作成する関数は次の1つです。
 def run_pipeline(file_path, target_status="completed"):
-    ...
+    try:
+        file_check_result = load_orders_csv(file_path)
+        if file_check_result is None:
+            return {
+                "status": "error",
+                "message": "file_not_found",
+                "sales_by_customer": {},
+                "error_counts": {}
+            }
+    except ValueError:
+        return {
+            "status": "error",
+            "message": "invalid_csv",
+            "sales_by_customer": {},
+            "error_counts": {}
+        }
+    totalling_result = aggregate_sales(file_check_result, target_status)
+    pipeline_result = {
+        "status": "success",
+        "message": None,
+        "sales_by_customer": totalling_result["sales_by_customer"],
+        "error_counts": totalling_result["error_counts"]
+    }
+    return pipeline_result
 
 # 要件①：CSVの読み込み
 # run_pipeline() の中から load_orders_csv(file_path) を呼び出してください。
