@@ -518,8 +518,24 @@ def check_amount(amount):
 
 # 演習要件として次の関数を作成してください。
 def load_orders_csv(file_path):
-    pass
-    ...
+    required_columns = ["order_id", "customer_id", "amount", "status"]
+    result = []
+    import csv
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            dict_csv = csv.DictReader(file)
+            if not dict_csv.fieldnames or not all(column in dict_csv.fieldnames for column in required_columns):
+                raise ValueError
+            for row in dict_csv:
+                row["amount"] = int(row["amount"])
+                result.append(row)
+    except FileNotFoundError:
+        print("ファイルが存在しません")
+        return None
+    except ValueError:
+        print("CSVデータが不正です")
+        raise
+    return result
 
 # 要件①：CSVファイルの読み込み
 # file_path で指定されたCSVファイルを、csv.DictReader を使用して読み込んでください。
@@ -588,15 +604,169 @@ except ValueError:
     raise
 
 
+### STEP 1-6｜Python基礎の総合演習：CSV読み込み・検証・売上集計
+# 今回は、CSVの読み込みからデータ検証、売上集計、処理結果の返却までを一連の処理として実装します。
+# 実務のデータパイプラインを意識して、次の流れを実装します。
+#   CSVファイル：注文データの入力
+#     ↓
+#   load_orders_csv()：読み込み・必須列チェック・数値変換
+#     ↓
+#   aggregate_sales()：ステータス絞り込み・注文検証・集計
+#     ↓
+#   run_pipeline()： 処理全体を管理し、結果を返す
 
+# 今回使うPythonの知識
+# ① 関数を組み合わせて処理を実行する
+# STEP 1-4で学んだ、関数の分割と再利用です。
+def multiply(a, b):
+    return a * b
 
+def calculate(a, b):
+    result = multiply(a, b)
+    return {"result": result}
 
+print(calculate(3, 4))  # {'result': 12}
+# 今回も、すでに作成した関数を別の関数から呼び出します。
+#
+# ② 関数の戻り値が None か確認する
+# STEP 1-5では、ファイルが存在しない場合に None を返しました。
+data = load_orders_csv(file_path)
+if data is None:
+    # ファイル読み込みに失敗した場合
+    ...
+# None と比較するときは、is None を使用します。
+#
+# ③ 辞書から値を取り出して新しい辞書を作る
+result = {
+    "sales_by_customer": {"C001": 12000},
+    "error_counts": {"missing_count": 0}
+}
 
+pipeline_result = {
+    "status": "success",
+    "sales": result["sales_by_customer"],
+    "errors": result["error_counts"]
+}
+# このように、既存の関数が返した辞書を使って、処理全体の結果を組み立てられます。
+#
+# ④ 例外を呼び出し側で捕捉する
+# STEP 1-5で学んだ raise の復習です。
+def convert_number(value):
+    return int(value)
 
+def process(value):
+    try:
+        return convert_number(value)
+    except ValueError:
+        return {"status": "error"}
+# convert_number() で発生した ValueError は、呼び出し側の process() で捕捉できます。
+# 今回はこの仕組みを利用します。
 
+# 演習用データ：
+# STEP 1-5で使用した、下記内容の orders.csv をそのまま使います。 新しいCSVファイルを作成する必要はありません。
+#   order_id,customer_id,amount,status
+#   1,C001,12000,completed
+#   2,C002,8000,cancelled
+#   3,C001,15000,completed
+#   4,C003,6000,completed
+# このCSVには不正データが含まれていないため、正常に読み込んだ場合、データ検証のエラー件数はすべて0になります。
 
+# 演習要件として今回は、これまで作成した次の3つの関数を再利用します。
+def load_orders_csv(file_path):
+    ...
 
+def validate_order(item):
+    ...
 
+def aggregate_sales(items, target_status="completed"):
+    ...
 
+# 上の3つはSTEP 1-4、1-5で完成させた関数を利用して構いません。
+# 今回、新たに作成する関数は次の1つです。
+def run_pipeline(file_path, target_status="completed"):
+    ...
 
+# 要件①：CSVの読み込み
+# run_pipeline() の中から load_orders_csv(file_path) を呼び出してください。
+# CSVが存在しない場合、load_orders_csv() は None を返します。
+# その場合は、次の辞書を返してください。
+# {
+#     "status": "error",
+#     "message": "file_not_found",
+#     "sales_by_customer": {},
+#     "error_counts": {}
+# }
 
+# 要件②：売上集計
+# CSVを正常に読み込めた場合は、aggregate_sales() を呼び出してください。
+# その際、run_pipeline() に渡された target_status を、そのまま aggregate_sales() に渡してください。
+
+# 要件③：正常時の戻り値
+# 集計が成功した場合は、次の構造で返してください。
+# {
+#     "status": "success",
+#     "message": None,
+#     "sales_by_customer": {
+#         "C001": 27000,
+#         "C003": 6000
+#     },
+#     "error_counts": {
+#         "missing_count": 0,
+#         "invalid_type_count": 0,
+#         "negative_amount_count": 0
+#     }
+# }
+
+# 要件④：ValueErrorの処理
+# load_orders_csv() で ValueError が発生した場合は、run_pipeline() 側で捕捉してください。
+# その場合は、次の辞書を返してください。
+# {
+#     "status": "error",
+#     "message": "invalid_csv",
+#     "sales_by_customer": {},
+#     "error_counts": {}
+# }
+# STEP 1-5の load_orders_csv() 自体は変更せず、再送出された例外を run_pipeline() で処理する設計です。
+
+# 要件⑤：処理の役割を分離する
+# 各関数の役割は次のようにしてください。run_pipeline() の中に、CSV読み込みや顧客別集計の処理を重複して実装しないでください。
+#   関数	                担当する処理
+#   load_orders_csv()	CSV読み込み、必須列チェック、金額の整数変換
+#   validate_order()	注文1件のデータ検証
+#   aggregate_sales()	注文の絞り込み、検証、顧客別集計
+#   run_pipeline()      各処理の呼び出し、成功・失敗の結果管理
+
+# テストケース1：正常なCSVファイル
+result = run_pipeline("orders.csv")
+print(result)
+# 期待結果：
+# {
+#     "status": "success",
+#     "message": None,
+#     "sales_by_customer": {
+#         "C001": 27000,
+#         "C003": 6000
+#     },
+#     "error_counts": {
+#         "missing_count": 0,
+#         "invalid_type_count": 0,
+#         "negative_amount_count": 0
+#     }
+# }
+
+# テストケース2：存在しないCSVファイル
+result = run_pipeline("not_found.csv")
+print(result)
+# 期待結果：
+# ファイルが存在しません
+# {'status': 'error', 'message': 'file_not_found', 'sales_by_customer': {}, 'error_counts': {}}
+
+# 実装のヒント
+# 今回は、run_pipeline() が全体の制御役です。
+# 処理の流れは以下のようになります。
+#   1. try の中でCSV読み込み関数を呼び出す。
+#   2. ValueError が発生したら、エラー結果を返す。
+#   3. 読み込み結果が None なら、ファイル未存在のエラー結果を返す。
+#   4. それ以外なら売上集計関数を呼び出す。
+#   5. 集計結果から必要な値を取り出し、成功結果の辞書を返す。
+# なお、ファイルが存在しない場合と、CSVの内容が不正な場合は、異なるエラーとして扱うことがポイントです。
