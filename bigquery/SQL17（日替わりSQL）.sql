@@ -196,4 +196,85 @@ FROM customer_order_data
 ORDER BY customer_id ASC, order_date ASC, order_id ASC;
 
 
+/*
+日替わりSQL：日別ファネル分析と前日比較
+
+使用テーブル
+  resonant-tract-508812-p9.ga4_analysis.ga4_session_funnel_mart
+（以前作成した、GA4のセッション単位ファネル分析用データマート）
+（このテーブルは、1行＝1ユーザー×1セッションの粒度）
+
+今回使用する既存カラムは以下のとおりです。
+  カラム             内容
+  user_pseudo_id    ユーザー識別子
+  ga_session_id     セッションID
+  session_date      セッション日付
+  page_view_flag    ページ閲覧の有無（0/1）
+  view_item_flag    商品閲覧の有無（0/1）
+  add_to_cart_flag  カート追加の有無（0/1）
+
+演習要件
+以下の条件を満たすSQLを作成してください。
+  session_date ごとにセッション数を集計する。
+  各日について、view_item_flag = 1 のセッション数を集計する。
+  各日について、add_to_cart_flag = 1 のセッション数を集計する。
+  商品閲覧セッション数を分母、カート追加セッション数を分子として、カート追加率を算出する。
+  LAG() を使用して、直前の集計対象日のセッション数を取得する。
+  当日のセッション数と直前の集計対象日のセッション数の差分を算出する。
+  session_date の昇順で出力する。
+
+最終出力カラム
+  session_date：セッション日付
+  session_count：当日の総セッション数
+  view_item_sessions：商品閲覧セッション数
+  add_to_cart_sessions：カート追加セッション数
+  cart_add_rate：カート追加率
+  previous_session_count：直前の集計対象日の総セッション数
+  session_count_diff：当日と直前の集計対象日のセッション数の差
+
+注意事項
+  カート追加率は0〜1の小数で出力してください。
+  分母が0の場合は、エラーではなく NULL としてください。
+  最初の集計対象日は前日比較ができないため、previous_session_count と session_count_diff は NULL で構いません。
+  「直前の集計対象日」は、必ずしも暦上の前日とは限りません。
+  WITH 句（CTE）の使用は自由です。
+  今回は GROUP BY による日別集計と、LAG() による時系列比較を正しい順序で組み合わせることです。
+  特に、セッション単位のデータを日別に集約してからウィンドウ関数を適用する点を意識してください。
+*/
+WITH daily_agg AS (
+  SELECT
+    session_date,
+    COUNT(ga_session_id) AS session_count,
+    COUNT(IF(view_item_flag = 1, ga_session_id, NULL)) AS view_item_sessions,
+    COUNT(IF(add_to_cart_flag = 1, ga_session_id, NULL)) AS add_to_cart_sessions,
+    SAFE_DIVIDE(
+      COUNT(IF(add_to_cart_flag = 1, ga_session_id, NULL)),
+      COUNT(IF(view_item_flag = 1, ga_session_id, NULL))
+    ) AS cart_add_rate
+  FROM `resonant-tract-508812-p9.ga4_analysis.ga4_session_funnel_mart`
+  GROUP BY session_date
+),
+prev_daily_plus AS (
+  SELECT
+    session_date,
+    session_count,
+    view_item_sessions,
+    add_to_cart_sessions,
+    cart_add_rate,
+    LAG(session_count) OVER (
+      ORDER BY session_date ASC
+    ) AS previous_session_count
+  FROM daily_agg
+)
+SELECT
+  session_date,
+  session_count,
+  view_item_sessions,
+  add_to_cart_sessions,
+  cart_add_rate,
+  previous_session_count,
+  session_count - previous_session_count AS session_count_diff
+FROM prev_daily_plus
+ORDER BY session_date ASC;
+
 
