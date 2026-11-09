@@ -201,13 +201,343 @@ print(result)
 #   C003	6000	1
 # 確認後は orders.csv を元に戻してください。
 
-# 行（1）と列（'status'）を両方指定して上書きする
-df.loc[1, 'status'] = 'completed'
+# 行（1）と列（"status"）を両方指定して上書きする
+df.loc[1, "status"] = "completed"
 
 # 戻す
-df.loc[1, 'status'] = 'cancelled'
+df.loc[1, 'status'] = "cancelled"
 
 
-### STEP 2-3｜
+### STEP 2-3｜pandasのmergeによるテーブル結合
+# 今回は、データエンジニアの実務でも頻繁に使う データ同士の結合（JOIN） がテーマです。
+# SQLでの LEFT JOIN と INNER JOIN を、pandasの merge() で再現します。
+#
+# 今回使うPython・pandasの知識
+# ① pd.DataFrame()：データを作成する
+# Pythonの辞書からDataFrameを作成できます。
+import pandas as pd
+customers = pd.DataFrame(
+    {"customer_id": ["C001", "C002", "C003"],
+    "customer_name": ["田中", "佐藤", "鈴木"]}
+)
+# 今回は、既存の orders.csv に結合する顧客マスタとして使用します。
+#
+# ② merge()：DataFrameを結合する
+# 基本構文は以下です。
+result = pd.merge(
+    left_df,                # 左側のDataFrame
+    right_df,               # 右側のDataFrame
+    on="customer_id",       # 結合の基準にする列（キー）
+    how="left",             # 結合方法
+    validate="many_to_one"  # 左側のキーは複数（many）を許容、右側のキーは一意（one）を期待する制約
+)
+# ③ 結合先にデータが存在しない場合
+# 例えば、注文データに C004 が存在していて、顧客マスタには C004 が存在しないとします。
+#   注文データ                 |   顧客マスタ
+#   order_id	customer_id  |   customer_id   customer_name
+#   1           C001         |   C001          田中
+#   2           C004         |   C002          佐藤
+# LEFT JOIN に相当する how="left" では、C004 の注文も残り、顧客名は欠損値 NaN になります。
+# INNER JOIN に相当する how="inner" では、C004 の注文は結果から除外されます。
+#
+# ④ 結合させるCOLUMN名が表間で異なる場合
+# 仮に table_a では "product_code"、table_b では "product"　という、それぞれ異なる列名によって結合を行う場合、
+df_merged = pd.merge(
+    table_a,
+    table_b,
+    left_on="product_code",
+    right_on="product",
+    how="left"
+)
+# これはSQLのJOIN構文でON句を下記のように書くのと同じ
+#   ON table_a.product_code = table_b.product
+
+# 演習問題として使用する注文データは次の内容の orders.csv をそのまま使います。
+#   order_id	customer_id	amount	status
+#   1	C001	12000	completed
+#   2	C002	8000	cancelled
+#   3	C001	15000	completed
+#   4	C003	6000	completed
+#
+# 顧客マスタ
+# 今回は、次のコードでDataFrameを作成してください。新しいCSVファイルを作る必要はありません。
+customers = pd.DataFrame(
+    {"customer_id": ["C001", "C002"],
+    "customer_name": ["田中", "佐藤"]}
+)
+
+# 実装要件
+# 次の処理を行うPythonコードを作成してください。
+#   pd.read_csv() で orders.csv を読み込む。
+#   上記の customers DataFrameを作成する。
+#   customer_id をキーに、orders と customers を merge() で結合する。
+#   結合方法は how="left" を指定する。
+#   validate="many_to_one" を指定する。
+#   結合後、order_id、customer_id、amount、status、customer_name の5列をこの順番で出力する。
+
+# テストケース
+# テストケース1：LEFT JOIN
+# ここでは、顧客マスタに存在しない C003 の注文が残ることを確認します。
+# 期待する結果：
+#   order_id	customer_id	amount	status	customer_name
+#   1	C001	12000	completed	田中
+#   2	C002	8000	cancelled	佐藤
+#   3	C001	15000	completed	田中
+#   4	C003	6000	completed	NaN
+#
+# テストケース2：INNER JOIN
+# テストケース1のコードを変更して、how="inner" で結合してください。C003 の注文が除外され、3行になることを確認してください。
+# 期待する結果：
+#   order_id	customer_id	amount	status	customer_name
+#   1	C001	12000	completed	田中
+#   2	C002	8000	cancelled	佐藤
+#   3	C001	15000	completed	田中
+
+# 今後CSVファイル内の値を実際に変更する際に備えて orders.csv のコピーを作成
+buckup_orders = pd.read_csv("orders.csv")
+buckup_orders.to_csv("orders_origin.csv", index=False)
+
+df = pd.read_csv("orders.csv")
+
+customers = pd.DataFrame(
+    {"customer_id": ["C001", "C002"],
+     "customer_name": ["田中", "佐藤"]}
+)
+
+df.merge(
+    customers,
+    on="customer_id",
+    how="left",
+    validate="many_to_one"
+)
+
+df.merge(
+    customers,
+    on="customer_id",
+    how="inner",
+    validate="many_to_one"
+)
+
+
+### STEP 2-4｜pandasの欠損値処理
+# 今回は、欠損値（NULL）の検出・補完・除外です。
+#
+# 今回使うPython・pandasの知識
+# ① isna()：欠損値を検出する
+# pandasでは、欠損値を NaN や None、pd.NA などで表現します。
+df["customer_name"].isna()
+# 例えば、以下のDataFrameがあるとします。
+#   customer_id	customer_name
+#   C001	田中
+#   C002	佐藤
+#   C003	NaN
+# isna() の結果は次のとおりです。
+#   0    False
+#   1    False
+#   2    True
+# 欠損値の行だけを抽出する場合は、次のように書きます。
+missing_rows = df[
+    df["customer_name"].isna()
+]
+#
+# ② notna()：欠損値ではない行を検出する
+# notna() は isna() の逆です。
+valid_rows = df[
+    df["customer_name"].notna()
+]
+#
+# ③ fillna()：欠損値を補完する
+# 欠損値を指定した値で置き換えられます。
+df["customer_name"] = df["customer_name"].fillna("未登録")
+# 実行後：
+#   customer_id	customer_name
+#   C001	田中
+#   C002	佐藤
+#   C003	未登録
+# なお、fillna() は、戻り値を代入しなければ元のDataFrameを変更しません。
+#
+# ④ dropna()：欠損値を含む行を除外する
+valid_df = df.dropna(
+    subset=["customer_name"]
+)
+# subset には、欠損値の判定対象とする列を指定します。
+# この例では customer_name が欠損している行だけが除外され、他の列の欠損は除外条件になりません。
+#
+# ⑤ isna().sum()：欠損件数を数える
+missing_count = df["customer_name"].isna().sum()
+# True が1、False が0として集計されるため、欠損件数を取得できます。
+# データ品質チェックでは頻繁に使用する書き方です。
+
+# 今回の演習データとして次の内容の orders.csv と、後述の顧客マスタを引き続き使用します。
+#   orders.csv
+#   order_id	customer_id	amount	status
+#   1	C001	12000	completed
+#   2	C002	8000	cancelled
+#   3	C001	15000	completed
+#   4	C003	6000	completed
+#
+#   顧客マスタ（Python内で作成）
+customers = pd.DataFrame(
+    {"customer_id": ["C001", "C002"],
+     "customer_name": ["田中", "佐藤"]}
+)
+
+# 演習要件として今回は 2つのテストケース を実施します。
+# テストケース1：欠損値の検出と補完
+#   orders.csv を読み込む。
+#   顧客マスタを作成する。
+#   customer_id をキーに LEFT JOIN 相当の merge() を行う。validate="many_to_one" も指定する。
+#   customer_name の欠損件数を isna().sum() で取得して表示する。
+#   customer_name が欠損している行だけを isna() で抽出して表示する。
+#   fillna() で欠損した顧客名を "未登録" に補完する。
+#   補完後のDataFrameを表示する。
+#
+# テストケース2：欠損行の除外
+# テストケース1で作成した 補完前の結合結果 を使用してください。
+#   customer_name が欠損していない行だけを notna() で抽出する。
+#   別途、dropna(subset=["customer_name"]) でも欠損行を除外する。
+#   両方の結果を表示し、同じ3行になることを確認する。
+
+df = pd.read_csv("orders.csv")
+
+customers = pd.DataFrame(
+    {"customer_id": ["C001", "C002"],
+     "customer_name": ["田中", "佐藤"]}
+)
+
+order_customer = df.merge(
+    customers,
+    on="customer_id",
+    how="left",
+    validate="many_to_one"
+)
+
+name_na_count = order_customer["customer_name"].isna().sum()
+print(name_na_count)
+
+name_na_row = order_customer[
+    order_customer["customer_name"].isna()
+]
+print(name_na_row)
+
+# 作成したコピーにて fillna()
+order_customer_fll = order_customer.copy()
+order_customer_fll["customer_name"] = order_customer_fll["customer_name"].fillna("未登録")
+print(order_customer_fll)
+
+name_notna_row = order_customer[
+    order_customer["customer_name"].notna()
+]
+print(name_notna_row)
+
+name_na_except = order_customer.dropna(
+    subset=["customer_name"]
+)
+print(name_na_except)
+
+
+### STEP 2-5｜CSV出力・再読み込み・データ検証
+# 今回は、データ加工後の結果をCSVファイルとして保存し、そのファイルを再度読み込んで検証する処理です。
+# DataFrame → CSV保存 → CSV再読み込み → 検証という一連の流れを実装します。
+#
+# 今回使うPython・pandasの知識
+# ① to_csv()：DataFrameをCSVファイルに保存する
+df.to_csv("output.csv", index=False)
+# 例えば、次のDataFrameがあるとします。
+#   customer_id	total_amount
+#   C001	27000
+#   C002	8000
+# index=False で保存すると、CSVの中身は次のようになります。
+#   customer_id,total_amount
+#   C001,27000
+#   C002,8000
+# index=False を指定しない場合は、左端にインデックスの列が追加されます。
+# なお、同じ名前のCSVファイルが既に存在する場合、to_csv() は上書きします。
+#
+# ② pd.read_csv()：保存したCSVを再読み込みする
+loaded_df = pd.read_csv("output.csv")
+# これにより、保存したCSVを新しいDataFrameとして読み込めます。
+# 注意点として、CSVファイルにはpandasのデータ型情報が保存されません。
+# そのため、再読み込み時にデータ型が推定され、保存前と変わる場合があります。
+#
+# ③ len()：DataFrameの行数を取得する
+row_count = len(df)
+# SQLの COUNT(*) に近い考え方です。
+# ただし、len(df) はDataFrameの行数を取得するPythonの関数です。
+#
+# ④ DataFrame.equals()：2つのDataFrameを比較する
+is_equal = df1.equals(df2)
+# 2つのDataFrameの形状、対応する値、インデックス、列ラベルなどが一致しているかを判定します。
+# 対応する列のデータ型が異なる場合でも、値によっては True になります。
+print(is_equal)  # 結果：True
+# 今回の演習では、CSV保存前と再読み込み後のデータが一致しているか確認するために使用します。
+#
+# ⑤ assert：条件が成立することを検証する
+# Pythonの assert は、指定した条件が True であることを確認します。
+assert len(df) == 3
+# 条件が True の場合は、そのまま次の処理に進みます。
+# 条件が False の場合は AssertionError が発生します。
+assert len(df) == 3, "行数が一致しません"  # このようにメッセージを指定することもできます。
+# データ処理では、想定した件数や値が得られているかを確認する簡単な検証に利用できます。
+# なお、assert はPythonの最適化実行（-O）で無効化されるため、本番環境で必ず実行すべきデータ品質検証には明示的な例外処理を使用します。
+
+# 演習データとして今回も次の内容の既存 orders.csv を使用します。今回は顧客マスタとの結合は行いません。
+  # order_id	customer_id	amount	status
+  # 1	C001	12000	completed
+  # 2	C002	8000	cancelled
+  # 3	C001	15000	completed
+  # 4	C003	6000	completed
+
+# 演習要件として今回は2つのテストケースを実施します。
+# テストケース1：集計データの保存と検証
+#   orders.csv を読み込む。
+#   status が "completed" の注文だけを抽出する。
+#   customer_id ごとに amount の合計を算出する。
+#   集計結果の列名を customer_id、total_amount とする。
+#   total_amount の降順で並べる。
+#   index=False を指定し、customer_summary.csv という名前でCSVファイルに保存する。
+#   保存した customer_summary.csv を pd.read_csv() で再読み込みする。
+#   保存前と再読み込み後のDataFrameを equals() で比較し、結果を表示する。
+#   assert を使用して、再読み込み後の行数が2行であることを検証する。
+# 期待する集計結果：
+#   customer_id	total_amount
+#   C001	27000
+#   C003	6000
+# 期待する検証結果：
+# True
+# assert は正常に通過すれば何も表示されません。
+#
+# テストケース2：保存したデータの内容を検証する
+# テストケース1で再読み込みしたDataFrameを使用してください。
+#   customer_id が "C001" の行を抽出する。
+#   その行の total_amount を取得する。
+#   assert を使用して、その値が 27000 であることを検証する。
+#   検証した値を表示する。
+# 期待する出力：
+# 27000
+
+# 今回の実務的なポイント
+# 今回の演習は、データパイプラインにおける次の流れに相当します。
+#   Extract（抽出）：orders.csvを読み込む
+#     ↓
+#   Transform（変換）：completedの抽出・顧客別集計
+#     ↓
+#   Load（保存）：customer_summary.csvに出力
+#     ↓
+#   Validate（検証）：再読み込み・一致確認・件数と値の検証
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
