@@ -163,6 +163,26 @@ summary = summary.sort_values(
 #   最終結果を print() で表示する。
 #   最終的な列は、customer_id、total_amount、order_count の3列としてください。
 
+import pandas as pd
+df = pd.read_csv("orders.csv")
+
+completed_order = df[
+    df["status"] == "completed"
+]
+
+customer_summary = completed_order.groupby("customer_id").agg(
+    total_amount=("amount", "sum"),
+    order_count=("order_id", "count")
+)
+
+customer_summary = customer_summary.reset_index()
+
+result = customer_summary.sort_values(
+    "total_amount",
+    ascending=False
+)
+print(result)
+
 # 期待する出力
 #   customer_id	total_amount	order_count
 #   C001	27000	2
@@ -180,5 +200,14 @@ summary = summary.sort_values(
 #   C002	8000	1
 #   C003	6000	1
 # 確認後は orders.csv を元に戻してください。
+
+# 行（1）と列（'status'）を両方指定して上書きする
+df.loc[1, 'status'] = 'completed'
+
+# 戻す
+df.loc[1, 'status'] = 'cancelled'
+
+
+### STEP 2-3｜
 
 
