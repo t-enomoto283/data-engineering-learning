@@ -567,5 +567,173 @@ assert extract_value == 27000, "値が一致しません"
 # read_csv()、条件抽出、groupby()、merge()、欠損値処理、CSV出力・検証を組み合わせて、複数の処理を1つの関数にまとめます。
 #
 # 今回使うPython・pandasの知識
+# ① def：一連の処理を関数にまとめる
+# PythonのSTEP 1で学習した関数を、pandasのデータ加工にも利用します。
+# 例えば、次のようにDataFrameを受け取り、加工結果を返す関数を作れます。
+def filter_completed(df):
+    result = df[
+        df["status"] == "completed"
+    ]
+    return result
+# 呼び出す側は次のようになります。
+completed_df = filter_completed(df)
+# このようにすると、同じ処理を別のデータに対しても繰り返し利用できます。
+#
+# ② rename()：列名を変更する
+df = df.rename(
+    columns={"amount": "sales_amount"}
+)
+# amount 列を sales_amount に変更します。
+# なお、rename() は通常、新しいDataFrameを返すため、結果を変数に代入します。
+#
+# ③ sort_values()：複数の条件で並べ替える
+result = df.sort_values(
+    by=["total_amount", "customer_id"],
+    ascending=[False, True]
+)
+# この場合、次の順序で並べ替えます。
+#   1. total_amount の降順
+#   2. 金額が同じ場合は customer_id の昇順
+#
+# ④ DataFrame.equals()：加工結果を比較する
+is_equal = result1.equals(result2)
+# 今回は、関数から返された結果と、期待するDataFrameを比較するために使います。
+# 比較では、行の順序とインデックスにも注意してください。
+#
+# ⑤ assert：処理結果を検証する
+assert result.equals(expected), "集計結果が一致しません"
+# 条件が成立しない場合は AssertionError が発生します。
+# 今回の演習では、関数の処理結果が要件を満たしているか確認するために使用します。
+
+# 演習で使用するデータ
+# これまでと同じファイルの orders.csv を使用します。
+#   order_id	customer_id	amount	status
+#   1	C001	12000	completed
+#   2	C002	8000	cancelled
+#   3	C001	15000	completed
+#   4	C003	6000	completed
+#
+# 顧客マスタ
+# 以下のコードで作成してください。
+customers = pd.DataFrame(
+    {"customer_id": ["C001", "C002"],
+    "customer_name": ["田中", "佐藤"]}
+)
+
+# 演習要件
+# 次の関数を作成してください。
+import pandas as pd
+orders = pd.read_csv("orders.csv")
+
+def create_customer_sales_summary(orders_df, customers_df):
+    completed_orders = orders_df[
+        orders_df["status"] == "completed"
+    ]
+    customer_sales = completed_orders.groupby("customer_id").agg(
+        total_amount=("amount", "sum"),
+        order_count=("order_id", "count")
+    )
+    joined_customer = customer_sales.merge(
+        customers_df,
+        on="customer_id",
+        how="left",
+        validate="many_to_one"
+    )
+    joined_customer["customer_name"] = joined_customer["customer_name"].fillna("未登録")
+    change_to_order = joined_customer[
+        ["customer_id", "customer_name", "total_amount", "order_count"]
+    ]
+    order_by_data = change_to_order.sort_values(
+        by=["total_amount", "customer_id"],
+        ascending=[False, True]
+    )
+    result = order_by_data.reset_index(drop=True)
+    return result
+
+summary = create_customer_sales_summary(orders, customers)
+print(summary)
+
+# 関数には2つのDataFrameを渡し、顧客別の売上集計結果をDataFrameとして返します。
+# 関数内で実装する処理は次のとおりです。
+#   orders_df から status == "completed" の注文だけを抽出する。
+#   customer_id ごとに amount の合計と注文件数を集計する。
+#   集計結果の列名は total_amount、order_count とする。
+#   customers_df と customer_id をキーにLEFT JOIN相当の merge() を行う。
+#   validate="many_to_one" を指定する。
+#   顧客名が欠損している場合は "未登録" で補完する。
+#   最終的な列の順序を customer_id、customer_name、total_amount、order_count とする。
+#   total_amount の降順、同額の場合は customer_id の昇順で並べ替える。
+#   インデックスを0から振り直し、加工結果のDataFrameを返す。
+#
+# 注文件数は、order_id の count で集計してください。
+# 今回は関数内でCSVの読み書きは行いません。 CSVの読み込みと、必要な保存処理は関数の外側で行います。
+
+# テストケース
+# テストケース1：通常データの集計
+# orders.csv と、顧客マスタの customers を関数に渡してください。
+# 期待する結果：
+#   customer_id	customer_name	total_amount	order_count
+#   C001	田中	27000	2
+#   C003	未登録	6000	1
+# また、次の検証を行ってください。
+#   len() と assert で、結果が2行であることを確認する。
+#   equals() と assert で、期待するDataFrameと一致することを確認する。
+# 期待する結果のDataFrameは、次のコードで作成できます。
+expected1 = pd.DataFrame(
+    {"customer_id": ["C001", "C003"],
+    "customer_name": ["田中", "未登録"],
+    "total_amount": [27000, 6000],
+    "order_count": [2, 1]}
+)
+
+assert len(summary) == 2, "行数が一致しません"
+assert summary.equals(expected1), "集計結果が一致しません"
+
+# テストケース2：注文データを変更して再集計
+# 元の orders.csv は変更せず、読み込んだDataFrameのコピーを作成してください。
+# そのコピーに対して、次の変更を行います。
+#   order_id == 2 の status を "cancelled" から "completed" に変更する。
+#   order_id == 4 の amount を 6000 から 8000 に変更する。
+# 変更したDataFrameと、同じ顧客マスタを関数に渡してください。
+# 期待する結果：
+#   customer_id	customer_name	total_amount	order_count
+#   C001	田中	27000	2
+#   C002	佐藤	8000	1
+#   C003	未登録	8000	1
+# こちらも len() と assert で3行であることを確認し、equals() と assert で期待するDataFrameとの一致を検証してください。
+# 期待するDataFrame：
+expected2 = pd.DataFrame({
+    "customer_id": ["C001", "C002", "C003"],
+    "customer_name": ["田中", "佐藤", "未登録"],
+    "total_amount": [27000, 8000, 8000],
+    "order_count": [2, 1, 1]
+})
+
+testcase2 = orders.copy()
+
+testcase2.loc[testcase2["order_id"] == 2, "status"] = "completed"  # order_id == 2 の status を "completed" に変更
+
+testcase2.loc[testcase2["order_id"] == 4, "amount"] = 8000         # order_id == 4 の amount を 8000 に変更
+
+summary2 = create_customer_sales_summary(testcase2, customers)
+print(summary2)
+
+assert len(summary2) == 3, "行数が一致しません"
+assert summary2.equals(expected2), "集計結果が一致しません"
+
+# 今回のポイント
+# 今回、特に意識してほしいのは 処理の順序と関数の再利用性 です。
+#   入力：orders_df / customers_df
+#     ↓
+#   抽出・集計：completed抽出 -> 顧客別集計
+#     ↓
+#   結合・補完：merge -> fillna
+#     ↓
+#   整形：列の並べ替え -> sort_values -> reset_index
+#     ↓
+#   出力：return DataFrame
+
+
+
 
 
