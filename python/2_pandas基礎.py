@@ -506,7 +506,34 @@ assert len(df) == 3, "行数が一致しません"  # このようにメッセ�
 # 期待する検証結果：
 # True
 # assert は正常に通過すれば何も表示されません。
-#
+
+df = pd.read_csv("orders.csv")
+
+completed_order = df[
+    df["status"] == "completed"
+]
+
+total_amount = completed_order.groupby("customer_id").agg(
+    total_amount=("amount", "sum")
+)
+
+sort_total_amount = total_amount.sort_values(
+    "total_amount",
+    ascending=False  # ascending=False は降順
+)
+
+package_data = sort_total_amount.reset_index()
+
+package_data.to_csv("customer_summary.csv", index=False)
+
+reload_df = pd.read_csv("customer_summary.csv")
+print(reload_df)
+
+is_equal = package_data.equals(reload_df)
+print(is_equal)
+
+assert len(reload_df) == 2, "行数が一致しません"
+
 # テストケース2：保存したデータの内容を検証する
 # テストケース1で再読み込みしたDataFrameを使用してください。
 #   customer_id が "C001" の行を抽出する。
@@ -515,6 +542,15 @@ assert len(df) == 3, "行数が一致しません"  # このようにメッセ�
 #   検証した値を表示する。
 # 期待する出力：
 # 27000
+
+extract_row = reload_df[
+    reload_df["customer_id"] == "C001"
+]
+
+extract_value = extract_row["total_amount"].item()
+print(extract_value)
+
+assert extract_value == 27000, "値が一致しません"
 
 # 今回の実務的なポイント
 # 今回の演習は、データパイプラインにおける次の流れに相当します。
@@ -527,17 +563,9 @@ assert len(df) == 3, "行数が一致しません"  # このようにメッセ�
 #   Validate（検証）：再読み込み・一致確認・件数と値の検証
 
 
-
-
-
-
-
-
-
-
-
-
-
-
+### STEP 2-6｜pandas基礎の総合演習
+# read_csv()、条件抽出、groupby()、merge()、欠損値処理、CSV出力・検証を組み合わせて、複数の処理を1つの関数にまとめます。
+#
+# 今回使うPython・pandasの知識
 
 
