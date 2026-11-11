@@ -1,3 +1,4 @@
+from sys import excepthook
 
 ### STEP 3-1｜重複データの検証
 #
@@ -227,7 +228,29 @@ orders = pd.DataFrame({
 #   order_id  amount   amount_numeric
 #   103       unknown  NaN
 # 今回は元の amount 列を上書きせず、変換結果を別の列に保存してください。
-#
+
+print(orders.dtypes)
+
+orders["amount_numeric"] = pd.to_numeric(
+    orders["amount"],
+    errors="coerce"
+)
+
+origin_notna_and_convert_isna = orders[
+    orders["amount"].notna() & orders["amount_numeric"].isna()
+]
+
+extract_column = origin_notna_and_convert_isna[
+    ["order_id", "amount", "amount_numeric"]
+]
+print(extract_column)
+
+assert len(
+    orders[
+        orders["amount"].notna() & orders["amount_numeric"].isna()
+    ]
+) == 1, "集計結果が一致しません"
+
 # テストケース2：欠損値と正常データの検証
 # テストケース1で作成した amount_numeric 列を使用してください。
 #   元の amount 列が欠損している行を抽出し、order_id と amount を表示する。
@@ -245,34 +268,160 @@ orders = pd.DataFrame({
 #   104	       6000.0
 #   106	       15000.0
 
+origin_amount_isna = orders.loc[
+    orders["amount"].isna(),
+    ["order_id", "amount"]
+]
+print(origin_amount_isna)
+
+assert len(
+    orders[
+        orders["amount"].isna()
+    ]
+) == 1, "集計結果が一致しません"
+
+amount_numeric_notna = orders[
+    orders["amount_numeric"].notna()
+]
+completed_numeric = amount_numeric_notna[
+    ["order_id", "amount_numeric"]
+]
+print(completed_numeric)
+
+assert len(
+    orders[
+        orders["amount_numeric"].notna()
+    ]
+) == 4, "集計結果が一致しません"
 
 
+### STEP 3-3｜必須列の検証
+# 今回は、DataFrameに必要な列が存在するかを確認し、不足している列を検出する処理です。
+#
+# 今回使うPython・pandasの知識
+# ① df.columns：DataFrameの列名を取得する
+# STEP 2でも使用しましたが、今回は列名の検証に利用します。
+print(df.columns)
+# 例えば、次のDataFrameがあるとします。
+df = pd.DataFrame(
+    {"order_id": [101, 102],
+    "amount": [12000, 8000]}
+)
+# 出力結果：Index(['order_id', 'amount'], dtype='str')
+# df.columns は、DataFrameの列名を保持する Index オブジェクトを返します。
+#
+# ② in と not in：列の存在確認
+# Pythonの in を使うと、指定した列名が存在するかを確認できます。
+"order_id" in df.columns
+# 結果：True
+# 反対に、not in を使用すると、指定した列名が存在しないかを確認できます。
+"customer_id" not in df.columns
+# 結果：True
+# これらは、DataFrameに必要な列が存在するかを検証する際に使用できます。
+#
+# ③ リスト内包表記：条件に一致する要素を抽出する
+# STEP 1で学習したリスト操作を応用します。
+required_columns = ["order_id", "customer_id", "amount"]
+missing_columns = [col for col in required_columns if col not in df.columns]
+# 今回の例では、次の結果になります。
+# ['customer_id']
+# 通常の for 文と if 文を組み合わせても実装できます。
+#
+# ④ set：集合による列名の比較
+# Pythonの set は、重複しない要素の集合を扱うデータ型です。
+# 例えば、次の2つの集合があるとします。
+required = {"order_id", "customer_id", "amount"}
+actual = {"order_id", "amount"}
+# 集合の差を計算すると、一方に存在して他方には存在しない要素を取得できます。
+missing = required - actual
+print(missing)  # ['customer_id']
+# ただし、set は要素の順序を保証しません。
+# 不足している列名を、必須列リストに記載した順序で取得したい場合は、リスト内包表記が適しています。
+#
+# ⑤ raise ValueError()：検証に失敗したことを通知する
+#    try / except：例外を捕捉する
+# ValueError は、渡された値が処理の要件に適合していない場合などに使用される例外です。
+# 今回は、必須列が不足しているDataFrameを受け取った場合に、エラーを発生させるために利用します。
+try:
+    if 0 == 0:
+        raise ValueError("検証エラー")
+except ValueError as e:
+    print(e)
+# 出力結果：検証エラー
+# try 内で ValueError が発生すると、対応する except に処理が移ります。
+# 今回は、不足列が存在する場合に発生させた例外を捕捉し、メッセージを確認します。
 
+# 演習用データ
+# 今回は、以下の2つのDataFrameを使用します。既存のCSVファイルは変更しません。
+import pandas as pd
 
+orders_valid = pd.DataFrame(
+    {"order_id": [101, 102, 103],
+    "customer_id": ["C001", "C002", "C003"],
+    "amount": [12000, 8000, 15000],
+    "status": ["completed", "cancelled", "completed"]}
+)
 
+orders_invalid = pd.DataFrame({
+    "order_id": [104, 105],
+    "amount": [6000, 10000],
+    "status": ["completed", "completed"]
+})
 
+required_columns = [
+    "order_id",
+    "customer_id",
+    "amount",
+    "status"
+]
+# orders_valid には4つの必須列がすべて存在します。
+# 一方、orders_invalid には customer_id 列が存在しません。
 
+# 演習要件
+# 今回は、必須列の存在を確認する関数を作成してください。関数名と引数は、以下のとおりです。
+def validate_required_columns(df, required_columns):
+    # ここに検証処理を実装する
+    pass
 
+# 関数の仕様は次のとおりです。
+#   required_columns に指定された列が、すべて df に存在するかを確認する。
+#   不足している列名をリストとして取得する。リスト内の順序は required_columns の順序に従う。
+#   不足している列が1つもなければ、True を返す。
+#   不足している列がある場合は、ValueError を発生させる。
+#   例外メッセージには、不足している列名を含める。
+# 注意：今回は列の存在だけを検証します。 列内の欠損値、データ型、値の妥当性は検証対象に含めません。
 
+# テストケース
+# テストケース1：必須列がすべて存在する場合
+# orders_valid と required_columns を関数に渡してください。
+#   関数を呼び出し、戻り値を変数に格納する。
+#   戻り値を表示する。
+#   assert で戻り値が True であることを検証する。
+# 期待する結果：
+#   True
+# このケースでは例外は発生しません。
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# テストケース2：必須列が不足している場合
+# orders_invalid と required_columns を関数に渡してください。
+#   try / except を使って関数を呼び出す。
+#   関数が発生させた ValueError を捕捉する。
+#   捕捉した例外のメッセージを表示する。
+#   assert を使って、例外メッセージに "customer_id" が含まれていることを検証する。
+# 期待する出力例：
+#   必須列が不足しています: ['customer_id']
+# エラーメッセージの文章は自由ですが、不足している列名が含まれている必要があります。
+# また、例外が発生しなかった場合は、テストが失敗するようにしてください。
+# そのため、次のような構造を利用できます。
+# try / except / else の else は、try 内で例外が発生せず、処理が正常に終了した場合に実行されます。
+try:
+    # 関数を呼び出す
+    ...
+except ValueError as e:
+    # 例外メッセージを確認する
+    ...
+else:
+    # 例外が発生しなかった場合
+    assert False, "ValueErrorが発生しませんでした"
 
 
 
