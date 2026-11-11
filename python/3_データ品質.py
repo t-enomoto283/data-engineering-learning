@@ -380,8 +380,11 @@ required_columns = [
 # 演習要件
 # 今回は、必須列の存在を確認する関数を作成してください。関数名と引数は、以下のとおりです。
 def validate_required_columns(df, required_columns):
-    # ここに検証処理を実装する
-    pass
+    shortage_column = [column for column in required_columns if column not in df.columns]
+    if not shortage_column:
+        return True
+    else:
+        raise ValueError(f"必須列が不足しています: {shortage_column}")
 
 # 関数の仕様は次のとおりです。
 #   required_columns に指定された列が、すべて df に存在するかを確認する。
@@ -401,6 +404,14 @@ def validate_required_columns(df, required_columns):
 #   True
 # このケースでは例外は発生しません。
 
+try:
+    testcase1 = validate_required_columns(orders_valid, required_columns)
+except ValueError as e:
+    print(e)
+else:
+    assert testcase1 is True
+    print(f"{testcase1}\nこのケースでは例外は発生しません。")
+
 # テストケース2：必須列が不足している場合
 # orders_invalid と required_columns を関数に渡してください。
 #   try / except を使って関数を呼び出す。
@@ -411,21 +422,138 @@ def validate_required_columns(df, required_columns):
 #   必須列が不足しています: ['customer_id']
 # エラーメッセージの文章は自由ですが、不足している列名が含まれている必要があります。
 # また、例外が発生しなかった場合は、テストが失敗するようにしてください。
-# そのため、次のような構造を利用できます。
-# try / except / else の else は、try 内で例外が発生せず、処理が正常に終了した場合に実行されます。
+
 try:
-    # 関数を呼び出す
-    ...
+    testcase1 = validate_required_columns(orders_invalid, required_columns)
 except ValueError as e:
-    # 例外メッセージを確認する
-    ...
+    print(e)
+    assert "customer_id" in str(e)
 else:
-    # 例外が発生しなかった場合
     assert False, "ValueErrorが発生しませんでした"
 
 
+### STEP 3-4｜結合関係の検証
+# 今回は、データエンジニアの実務でも重要な JOINによるデータの増殖と、マスタに存在しないキーの検出 を扱います。
+#
+# 今回使うPython・pandasの知識
+# ① merge(validate=...)：結合キーの関係を検証する
+# STEP 2でも使用した merge() の validate を、今回はデータ品質検証の観点から扱います。
+result = orders.merge(
+    customers,
+    on="customer_id",
+    how="left",
+    validate="many_to_one"
+)
+# validate="many_to_one" は、右側で customer_id が一意か検証し、左側は同じ customer_id が複数存在しても構いません。
+# 指定した関係が成立しない場合、pandas.errors.MergeError が発生します。
+#
+# ② indicator=True：結合できたかどうかを確認する
+result = orders.merge(
+    customers,
+    on="customer_id",
+    how="left",
+    indicator=True
+)
+# indicator=True を指定すると、結合結果に _merge 列が追加されます。
+#   _merge の値    意味
+#   both          両方にある
+#   left_only     左にしかない
+#   right_only    右にしかない
+# LEFT JOINの場合、結合結果に right_only の行は現れません。
+# 例えば、注文データに存在する顧客IDがマスタに存在しなければ、その注文は left_only になります。
+#
+# ③ duplicated()：マスタ側のキー重複を検出する
+# STEP 3-1で学習した方法を利用します。
+duplicate_mask = customers.duplicated(
+    subset=["customer_id"],
+    keep=False
+)
+# この処理で、同じ customer_id を持つマスタレコードをすべて検出できます。
+# 結合前に右側のキーを検証することは、意図しない行数の増加を防ぐうえで重要です。
+#
+# ④ len()：結合前後の行数を比較する
+before_count = len(orders)
+after_count = len(result)
+# 例えば、注文データが4行、結合結果が6行だった場合、JOINによって行数が増加しています。
+# ただし、行数が増えたことだけで、必ずしも不正なJOINとは判断できません。
+# 今回の演習では「顧客マスタは顧客IDごとに1行」という業務ルールを設定するため、LEFT JOIN後に注文行数が増加することは想定外とします。
+#
+# ⑤ try / except：結合エラーを捕捉する
+from pandas.errors import MergeError
+try:
+    result = orders.merge(
+        customers,
+        on="customer_id",
+        how="left",
+        validate="many_to_one"
+    )
+except MergeError as e:
+    print(e)
+# validate による結合関係の検証に失敗した場合は、MergeError を捕捉できます。
+# 今回は、この例外が発生すること自体をテストします。
 
+# 演習用データ
+# 今回は次の3つのDataFrameを使用します。既存のCSVファイルは変更しません。
+import pandas as pd
+from pandas.errors import MergeError
 
+orders = pd.DataFrame(
+    {"order_id": [101, 102, 103, 104],
+    "customer_id": ["C001", "C002", "C001", "C004"],
+    "amount": [12000, 8000, 15000, 6000]}
+)
+
+customers_valid = pd.DataFrame(
+    {"customer_id": ["C001", "C002", "C003"],
+    "customer_name": ["田中", "佐藤", "鈴木"]}
+)
+
+customers_invalid = pd.DataFrame(
+    {"customer_id": ["C001", "C001", "C002", "C003"],
+    "customer_name": ["田中", "田中（重複）", "佐藤", "鈴木"]}
+)
+# それぞれのデータの役割は次のとおりです。
+#   orders：注文データ。C001には2件の注文があり、C004は顧客マスタに存在しません。
+#   customers_valid：顧客IDが一意なマスタ。
+#   customers_invalid：C001が重複している不正なマスタ。
+
+# 演習要件
+# テストケース1：正常な結合関係と参照整合性の検証
+# orders と customers_valid を使用してください。
+#   customer_id をキーとしてLEFT JOINする。
+#   validate="many_to_one" と indicator=True を指定する。
+#   結合結果を表示する。
+#   結合前の orders と結合後のDataFrameの行数を取得し、表示する。
+#   assert を使って、結合前後の行数が等しいことを検証する。
+#   _merge が left_only の行を抽出し、order_id と customer_id を表示する。
+#   assert を使って、left_only が1行であることを検証する。
+# 期待する結合結果：
+#   order_id	customer_id	amount	customer_name	_merge
+#   101	C001	12000	田中	both
+#   102	C002	8000	佐藤	both
+#   103	C001	15000	田中	both
+#   104	C004	6000	NaN	left_only
+# 期待する検証値：
+#   確認項目	期待値
+#   結合前の行数	4
+#   結合後の行数	4
+#   left_only の行数	1
+# 今回は、C004をマスタに追加したり、未登録の注文を削除したりする必要はありません。
+
+# テストケース2：マスタの重複と結合エラーの検証
+# orders と customers_invalid を使用してください。
+#   customers_invalid の customer_id を基準に、重複しているレコードをすべて抽出する。
+#   抽出したレコードを表示する。
+#   assert を使って、重複レコードが2行であることを検証する。
+#   orders と customers_invalid を customer_id でLEFT JOINする。このとき、validate="many_to_one" を指定する。
+#   try / except で MergeError を捕捉し、エラーメッセージを表示する。
+#   assert を使って、捕捉した例外が MergeError であることを検証する。
+#   MergeError が発生しなかった場合は、テストが失敗するようにする。
+# 期待する重複レコード：
+#   customer_id	customer_name
+#   C001	田中
+#   C001	田中（重複）
+# 期待する例外の種類は MergeError です。エラーメッセージの具体的な文章はpandasのバージョン次第で変わるため今回は一致を検証しません。
 
 
 
