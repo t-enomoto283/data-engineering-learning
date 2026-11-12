@@ -1,4 +1,3 @@
-from sys import excepthook
 
 ### STEP 3-1｜重複データの検証
 #
@@ -540,6 +539,26 @@ customers_invalid = pd.DataFrame(
 #   left_only の行数	1
 # 今回は、C004をマスタに追加したり、未登録の注文を削除したりする必要はありません。
 
+testcase1 = orders.merge(
+    customers_valid,
+    on="customer_id",
+    how="left",
+    validate="many_to_one",
+    indicator=True
+)
+print(testcase1)
+
+print(len(orders))
+print(len(testcase1))
+assert len(orders) == len(testcase1), "行数が異なります。"
+
+left_only_data = testcase1.loc[
+    testcase1["_merge"] == "left_only",
+    ["order_id", "customer_id"]
+]
+print(left_only_data)
+assert len(left_only_data) == 1,  "行数が異なります。"
+
 # テストケース2：マスタの重複と結合エラーの検証
 # orders と customers_invalid を使用してください。
 #   customers_invalid の customer_id を基準に、重複しているレコードをすべて抽出する。
@@ -554,6 +573,272 @@ customers_invalid = pd.DataFrame(
 #   C001	田中
 #   C001	田中（重複）
 # 期待する例外の種類は MergeError です。エラーメッセージの具体的な文章はpandasのバージョン次第で変わるため今回は一致を検証しません。
+
+dup_customer_judge = customers_invalid.duplicated(
+    subset=["customer_id"],
+    keep=False
+)
+dup_record = customers_invalid[dup_customer_judge]
+print(dup_record)
+
+assert len(dup_record) == 2, "行数が異なります。"
+
+try:
+    pd.merge(
+        orders,
+        customers_invalid,
+        on="customer_id",
+        how="left",
+        validate="many_to_one",
+        indicator=True  # 今回指定ないが一応付けておく
+    )
+except MergeError as me:
+    assert isinstance(me, MergeError), "MergeErrorではありません。"
+    print(f"MergeErrorです。\n {me}")
+else:
+    assert False, "MergeErrorが発生しませんでした。"
+
+
+### STEP 3-5｜データ品質レポート
+# これまでは、重複・データ型・必須列・結合関係を個別に検証してきました。
+# 今回は、それらの検証結果を1つの辞書にまとめ、データの品質状態を確認できるレポートを作成します。
+#
+# 今回使うPython・pandasの知識
+# ① 辞書を使って検証結果をまとめる
+# Pythonの辞書は、キーと値の組み合わせで情報を管理します。例えば、次のような検証結果があったとします。
+report = {
+    "total_rows": 100,
+    "duplicate_count": 3,
+    "missing_count": 5
+}
+# 値を取得するには、キーを指定します。
+print(report["duplicate_count"])
+# 出力結果：3
+# 今回は、この辞書を関数の戻り値として使用します。
+#
+# ② sum() と真偽値による件数集計
+# pandasでは、条件式によって生成された真偽値のSeriesに対して .sum() を使用すると、True の件数を取得できます。
+df = pd.DataFrame(
+    {"amount": [1000, None, 3000, None]}
+)
+print(df["amount"].isna().sum())
+# 出力結果：2
+# これは、True が1、False が0として集計されるためで、同じ考え方で重複件数や変換失敗件数も集計できます。
+#
+# ③ pd.to_numeric(errors="coerce") と元データの比較
+# STEP 3-2の復習です。
+df = pd.DataFrame(
+    {"amount": ["1000", "unknown", None]}
+)
+converted = pd.to_numeric(
+    df["amount"],
+    errors="coerce"
+)
+# 変換結果：
+#   amount     converted
+#   "1000"     1000.0
+#   "unknown"  NaN
+#   None	   NaN
+# 変換後の欠損値を単純に数えると2件ですが、そのうち1件は元から欠損していたものです。
+# 型変換の失敗件数を求める場合は、元データに値が存在していたことも条件に含める必要があります。
+#
+# ④ duplicated(subset=...) の keep による違い
+# 例えば、次のデータがあるとします。
+df = pd.DataFrame(
+    {"id": [1, 2, 2, 3, 3, 3]}
+)
+df.duplicated(
+    subset=["id"],
+    keep=False
+)
+# keep=False の場合、重複しているIDのレコードをすべて検出するため、True は5件になります。
+df.duplicated(
+    subset=["id"],
+    keep="first"
+)
+# keep="first" の場合、各IDの最初のレコードは重複と判定しないため、True は3件になります。
+#
+# ⑤ 辞書の値を使った品質判定
+# 例えば、次のレポートがあるとします。
+report = {
+    "duplicate_count": 0,
+    "conversion_error_count": 0
+}
+# 複数の検証結果を使って、品質上の問題がないかを判定できます。
+is_valid = (
+        report["duplicate_count"] == 0
+        and report["conversion_error_count"] == 0
+)
+# is_valid は True または False になります。今回は、欠損値なども含めて判定します。
+
+# 演習用データ
+# 以下の2つのDataFrameを使用してください。
+orders_valid = pd.DataFrame(
+    {"order_id": ["101", "102", "103", "104"],
+    "customer_id": ["C001", "C002", "C003", "C004"],
+    "amount": ["12000", "8000", "15000", "6000"]}
+)
+
+orders_invalid = pd.DataFrame(
+    {"order_id": ["101", "102", "102", "104", "105", "106"],
+    "customer_id": ["C001", "C002", "C002", None, "C005", "C006"],
+    "amount": ["12000", "8000", "8000", "unknown", None, "15000"]}
+)
+
+required_columns = [
+    "order_id",
+    "customer_id",
+    "amount"
+]
+# orders_valid は品質上の問題がないデータです。
+# orders_invalid には、次の問題が含まれており、今回はこの4種類の問題を集計します。
+#   order_id の重複、customer_id の欠損、amount の数値変換失敗、amount の元からの欠損
+
+# 演習要件
+# 次の関数を実装してください。
+def create_quality_report(df, required_columns):
+    shortage_column = [column for column in required_columns if column not in df.columns]
+    if shortage_column:
+        raise ValueError(f"必須列が不足しています： {shortage_column}")
+    else:
+        total_rows = int(
+            len(df)
+        )
+        duplicate_order_count = int(
+            df.duplicated(
+                subset=["order_id"],
+                keep=False
+            ).sum()
+        )
+        missing_customer_count = int(
+            df["customer_id"].isna().sum()
+        )
+        missing_amount_count = int(
+            df["amount"].isna().sum()
+        )
+        amount_numeric = pd.to_numeric(
+            df["amount"],
+            errors="coerce"
+        )
+        conversion_error_count = int(
+            (
+                df["amount"].notna() & amount_numeric.isna()
+            ).sum()
+        )
+        report = {
+            "total_rows": total_rows,
+            "duplicate_order_count": duplicate_order_count,
+            "missing_customer_count": missing_customer_count,
+            "missing_amount_count": missing_amount_count,
+            "conversion_error_count": conversion_error_count
+        }
+        is_valid = (
+            report["duplicate_order_count"] == 0
+            and report["missing_customer_count"] == 0
+            and report["missing_amount_count"] == 0
+            and report["conversion_error_count"] == 0
+        )
+        report["is_valid"] = is_valid
+    return report
+
+# 関数の仕様
+# ① 必須列の検証
+#   最初に、required_columns に指定された列がすべて存在するかを確認してください。
+#   不足している列があれば、不足列名を含む ValueError を発生させます。
+#   必須列がすべて存在する場合のみ、以降の検証を実行してください。
+# ② レコード件数
+#   DataFrameの全レコード数を取得してください。
+# ③ 注文IDの重複件数
+#  order_id を基準に、重複しているレコードをすべて数えてください。
+#  最初に出現したレコードも件数に含めます。
+# ④ 顧客IDの欠損件数
+#   customer_id が欠損しているレコードを数えてください。
+# ⑤ 金額の欠損件数
+#   元データの amount が欠損しているレコードを数えてください。
+# ⑥ 金額の数値変換失敗件数
+#   amount を数値に変換し、元データには値が存在するものの、数値変換に失敗したレコードを数えてください。
+#   元から欠損していたレコードは、変換失敗件数に含めません。
+#   なお、元の amount 列は変更しないでください。
+# ⑦ 品質判定
+#   次の条件をすべて満たす場合は True、それ以外は False としてください。
+#   - 注文IDの重複件数が0件
+#   - 顧客IDの欠損件数が0件
+#   - 金額の欠損件数が0件
+#   - 金額の数値変換失敗件数が0件
+# ⑧ 辞書を返す
+#   最終的に、以下のキーを持つ辞書を返してください。キー名は指定どおりにしてください。
+# {
+#     "total_rows": ...,
+#     "duplicate_order_count": ...,
+#     "missing_customer_count": ...,
+#     "missing_amount_count": ...,
+#     "conversion_error_count": ...,
+#     "is_valid": ...
+# }
+
+# テストケース
+# テストケース1：品質上の問題がないデータ
+# orders_valid を使用してください。
+# 関数を呼び出し、返された辞書を表示します。
+# 期待する結果：
+# {
+#     "total_rows": 4,
+#     "duplicate_order_count": 0,
+#     "missing_customer_count": 0,
+#     "missing_amount_count": 0,
+#     "conversion_error_count": 0,
+#     "is_valid": True
+# }
+# assert を使って、返された辞書が上記の期待値と一致することを検証してください。
+
+expectations1 = {
+    "total_rows": 4,
+     "duplicate_order_count": 0,
+     "missing_customer_count": 0,
+     "missing_amount_count": 0,
+     "conversion_error_count": 0,
+     "is_valid": True
+}
+
+try:
+    testcase1 = create_quality_report(orders_valid, required_columns)
+    print(testcase1)
+    assert testcase1 == expectations1, "結果が一致しません。"
+except ValueError as ve:
+    print(ve)
+
+# テストケース2：品質上の問題があるデータ
+# orders_invalid を使用してください。
+# 関数を呼び出し、返された辞書を表示します。
+# 期待する結果：
+# {
+#     "total_rows": 6,
+#     "duplicate_order_count": 2,
+#     "missing_customer_count": 1,
+#     "missing_amount_count": 1,
+#     "conversion_error_count": 1,
+#     "is_valid": False
+# }
+# こちらも assert を使って、返された辞書が上記の期待値と一致することを検証してください。
+# なお、今回の2つのテストデータには必須列がすべて存在するため ValueError は発生しませんが、関数内には必須列の検証処理を実装してください。
+
+expectations2 = {
+    "total_rows": 6,
+     "duplicate_order_count": 2,
+     "missing_customer_count": 1,
+     "missing_amount_count": 1,
+     "conversion_error_count": 1,
+     "is_valid": False
+}
+
+try:
+    testcase2 = create_quality_report(orders_invalid, required_columns)
+    print(testcase2)
+    assert testcase2 == expectations2, "結果が一致しません。"
+except ValueError as ve:
+    print(ve)
+
+
 
 
 
