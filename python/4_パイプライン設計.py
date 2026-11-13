@@ -248,39 +248,255 @@ assert expected2.equals(testcase2), "結果が一致しません。"
 #
 # 今回使うPythonの知識
 # ① logging とは
+# logging は、プログラムの実行状況を記録するためのPython標準ライブラリです。
+# これまで使用してきた print() でも処理状況を表示できますが、logging ではログの重要度や出力形式、出力先などを管理できます。
+# 例えば、次のように記述します。
+import logging
+logging.info("データの読み込みを開始しました")
+# ただし、logging.info() は、ログの設定によっては表示されません。
+# そこで、ログの出力レベルを設定します。
+#
+# ② logging.basicConfig()：ログの基本設定
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s: %(message)s"
+)
+# 各設定の意味は次のとおりです。
+#   設定                  意味
+#   level=logging.INFO   INFO以上の重要度のログを出力する
+#   format               ログの表示形式を指定する
+#   %(levelname)s        ログレベルを表示する
+#   %(message)s          ログメッセージを表示する
+# 例えば、
+logging.info("処理を開始しました")
+# 出力例：INFO: 処理を開始しました
+# なお、basicConfig() は、すでにルートロガーにハンドラーが設定されている場合、通常は設定を変更しません。
+# 今回は設定の影響を分かりやすくするため、専用のロガーを作成して使用します。
+#
+# ③ logging.getLogger()：ロガーを取得する
+logger = logging.getLogger("order_pipeline")
+logger.setLevel(logging.INFO)
+# getLogger() は、指定した名前のロガーを取得します。
+# 同じ名前で呼び出すと、同じロガーオブジェクトを取得できます。
+# 今回の演習では、この logger を使用してログを記録します。
+#
+# ④ ログレベルの違い
+# ログには重要度を表すレベルがあります。
+#   レベル      主な用途
+#   DEBUG      詳細な調査・デバッグ情報
+#   INFO       処理の開始・終了・処理件数
+#   WARNING    処理は継続できるが注意が必要な状況
+#   ERROR      処理中に発生したエラー
+#   CRITICAL   システム全体に影響する重大な問題
+# 今回使用するのは、主に INFO と WARNING です。
+# 例えば、次のような使い分けができます。
+logger.info("注文データを読み込みました")
+logger.warning("未登録の顧客が存在します")
+#
+# ⑤ ログに変数を埋め込む
+# 処理件数をログに出力する場合は、次のように記述できます。
+row_count = 100
+logger.info("処理件数: %d件", row_count)
+# 出力例：INFO: 処理件数: 100件
+# %d は整数を埋め込むための書式です。
+# logging では、このようにメッセージと値を別々に渡す方法が一般的です。
+#
+# ⑥ logging.StreamHandler()：ログの出力先を設定する
+# ログをコンソールへ出力するには、StreamHandler を使用できます。
+import sys
+import logging
+logger = logging.getLogger("sample_pipeline")
+logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(
+    logging.Formatter("%(levelname)s: %(message)s")
+)
+
+logger.addHandler(handler)
+logger.propagate = False
+# StreamHandler(sys.stdout) は、標準出力にログを出力します。
+# setFormatter() は、ログの表示形式を設定します。
+# propagate = False は、ログが親ロガーにも渡されて重複出力されることを防ぐための設定です。
+# 注意：
+#   同じロガーに addHandler() を繰り返すと、ログが重複して表示される場合があります。
+#   今回の演習では、ロガーの設定を最初に一度だけ実行してください
+
+# 演習用データ
+# STEP 4-1と同じ下記のデータを使用します。
+orders
+customers
+
+# また、STEP 4-1で作成した以下の3つの関数をそのまま使用してください。
+def filter_completed_orders(orders):
+    completed = orders[
+        orders["status"] == "completed"
+    ].copy()
+    return completed
+
+def aggregate_customer_orders(completed):
+    aggregate = completed.groupby(
+        "customer_id",
+        as_index=False  # 指定したキー（ここでは customer_id）をインデックス列としない =DataFrameに含まれる通常の列とする
+    ).agg(
+        total_amount=("amount", "sum"),
+        order_count=("order_id", "count")
+    )
+    return aggregate
+
+def join_customer_master(aggregate, customers):
+    joined = aggregate.merge(
+        customers,
+        on="customer_id",
+        how="left",
+        validate="many_to_one",
+    )
+    joined["customer_name"] = joined["customer_name"].fillna("未登録")
+    return joined
+# これらの関数の内部にログ処理を追加する必要はありません。
+# 今回は、パイプライン全体を管理する関数にログを追加することを目的とします。
+
+# 演習要件
+# 関数 run_pipeline_with_logging(orders, customers, logger)
+# 以下の引数を持つ関数を作成してください。
+def run_pipeline_with_logging(orders, customers, logger):
+    logger.info("関数の処理開始")
+    orders_row = len(orders)
+    logger.info("入力された orders の行数: %d件", orders_row)
+    completed = filter_completed_orders(orders)
+    completed_row = len(completed)
+    logger.info("completed注文の抽出件数: %d件", completed_row)
+    aggregate = aggregate_customer_orders(completed)
+    aggregate_row = len(aggregate)
+    logger.info("顧客別集計後: %d件", aggregate_row)
+    result = join_customer_master(aggregate, customers)
+    result_row = len(result)
+    logger.info("顧客マスタ結合後: %d件", result_row)
+    unregistered = result[
+        result["customer_name"] == "未登録"
+    ]
+    unregistered_row = len(unregistered)
+    if unregistered_row > 0:
+        logger.warning("未登録の顧客: %d件", unregistered_row)
+    result = result.sort_values(
+        "customer_id",
+        ascending=True
+    )
+    result = result.reset_index(drop=True)
+    logger.info("関数の処理完了")
+    return result
+
+# 処理の順番とログの内容は次のとおりです。
+#   順番	処理             ログレベル	記録する内容
+#   1	パイプライン開始	INFO	    開始したこと
+#   2	入力データの確認	INFO	    注文データの件数
+#   3	完了注文の抽出	    INFO	    抽出後の件数
+#   4	顧客別集計	    INFO	    集計後の件数
+#   5	顧客マスタ結合	    INFO	    結合後の件数
+#   6	未登録顧客の確認	WARNING	    未登録顧客が存在する場合、その件数
+#   7	並べ替え	        —	        customer_id 昇順、インデックス振り直し
+#   8	パイプライン終了	INFO	    終了したこと
+#
+# 具体的な要件は以下です。ログメッセージの文章は自由ですが、処理内容と件数が分かるようにしてください。
+#   関数の開始時に logger.info() で開始ログを出力する。
+#   入力された orders の行数をINFOログに記録する。
+#   filter_completed_orders() を実行し、結果の行数をINFOログに記録する。
+#   aggregate_customer_orders() を実行し、結果の行数をINFOログに記録する。
+#   join_customer_master() を実行し、結果の行数をINFOログに記録する。
+#   結合結果の customer_name が "未登録" である行を数え、1行以上存在する場合のみWARNINGログを出力する。
+#   最終結果を customer_id の昇順に並べ替え、インデックスを振り直す。
+#   終了ログをINFOで出力し、最終DataFrameを返す。
+
+# テストケース
+# テストケース1：未登録顧客が存在する場合
+# 最初に、演習用の orders と customers を使用します。
+# 関数の実行前に、以下のロガーを設定してください。この設定は一度だけ実行してください。
+import logging
+import sys
+
+logger = logging.getLogger("order_pipeline_step4_2")
+logger.setLevel(logging.INFO)
+logger.propagate = False
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(
+    logging.Formatter("%(levelname)s: %(message)s")
+)
+logger.addHandler(handler)
+
+# その後、run_pipeline_with_logging() を実行します。
+# 期待するログの例：
+#   INFO: パイプラインを開始しました
+#   INFO: 入力注文件数: 6件
+#   INFO: 完了注文件数: 5件
+#   INFO: 顧客別集計件数: 4件
+#   INFO: マスタ結合後の件数: 4件
+#   WARNING: 未登録顧客が1件存在します
+#   INFO: パイプラインを終了しました
+# 期待する最終結果：
+#   customer_id	total_amount	order_count	customer_name
+#   C001	27000	2	田中
+#   C002	10000	1	佐藤
+#   C003	6000	1	鈴木
+#   C004	5000	1	未登録
+# 次の項目を assert で検証してください。
+#   最終DataFrameが4行であること。
+#   C004の customer_name が "未登録" であること。
+
+testcase1 = run_pipeline_with_logging(orders, customers, logger)
+print(testcase1)
+
+assert len(testcase1) == 4, "行数が異なります"
+assert testcase1.loc[
+    testcase1["customer_id"] == "C004", "customer_name"
+].item() == "未登録", "値が異なります"
+
+# テストケース2：未登録顧客が存在しない場合
+# テストケース1の orders は変更せず、顧客マスタに C004 を追加した新しいDataFrameを作成してください。
+# 例えば、customers_complete という変数名にして、C004の顧客名は "高橋" としてください。
+# この新しい顧客マスタを使って、同じ run_pipeline_with_logging() を実行します。
+# 期待するログの例：
+#   INFO: パイプラインを開始しました
+#   INFO: 入力注文件数: 6件
+#   INFO: 完了注文件数: 5件
+#   INFO: 顧客別集計件数: 4件
+#   INFO: マスタ結合後の件数: 4件
+#   INFO: パイプラインを終了しました
+# このテストケースでは、WARNINGログが出力されないことが重要です。
+# 期待する最終結果：
+#   customer_id	total_amount	order_count	customer_name
+#   C001	27000	2	田中
+#   C002	10000	1	佐藤
+#   C003	6000	1	鈴木
+#   C004	5000	1	高橋
+# 次の項目を assert で検証してください。
+#   最終DataFrameが4行であること。
+#   C004の customer_name が "高橋" であること。
+# ログについては、実際に出力されたログを提示して確認できれば十分です。 ログ内容を自動的に検証するコードを追加する必要はありません。
+
+customers_complete = customers.copy()
+customers_complete.loc[
+    len(customers_complete)] = {
+    "customer_id": "C004",
+    "customer_name": "高橋"
+}
+
+testcase2 = run_pipeline_with_logging(orders, customers_complete, logger)
+print(testcase2)
+
+assert len(testcase2) == 4, "行数が異なります"
+assert testcase2.loc[
+    testcase2["customer_id"] == "C004", "customer_name"
+].item() == "高橋", "値が異なります"
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+### STEP 4-3｜設定管理
+# STEP 4-2では、パイプラインの各工程にログを追加し、処理件数や未登録顧客の存在を確認できるようにしました。
+# 今回は、パイプラインの処理条件を関数内に直接記述せず、設定値として外部から渡す方法です。
+# これにより、同じパイプラインを、処理条件だけ変更して再利用できるようになります。
+#
+# 今回使うPython・pandasの知識
+# ① ハードコーディングとは
 
 
 
