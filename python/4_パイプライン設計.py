@@ -497,33 +497,413 @@ assert testcase2.loc[
 #
 # 今回使うPython・pandasの知識
 # ① ハードコーディングとは
+# 例えば、STEP 4-1では次のように記述しました。
+def filter_completed_orders(orders):
+    completed = orders[
+        orders["status"] == "completed"
+    ].copy()
+    return completed
+# ここでは "completed" という条件を関数内に直接記述しています。
+# これをハードコーディングと呼びます。
+# もし "pending" の注文を抽出したい場合、関数のコード自体を修正する必要があります。
+# そこで、処理条件を引数として受け取るようにします。
+def filter_orders_by_status(orders, status):
+    filtered = orders[
+        orders["status"] == status
+    ].copy()
+    return filtered
+# これなら、同じ関数で異なる条件を使用できます。
+completed = filter_orders_by_status(orders, "completed")
+pending = filter_orders_by_status(orders, "pending")
+# 関数の処理内容は変更していません。
+#
+# ② 辞書（dict）による設定管理
+# 複数の設定値をまとめて管理する場合、辞書を使用できます。
+config = {
+    "target_status": "completed",
+    "sort_column": "customer_id",
+    "ascending": True
+}
+# 設定値を取得するには、キーを指定します。
+status = config["target_status"]
+sort_column = config["sort_column"]
+# このようにすれば、処理条件を1か所にまとめられます。
+#
+# ③ 設定値を関数に渡す
+# 関数に設定辞書を渡すこともできます。
+def filter_orders(orders, config):
+    target_status = config["target_status"]
+    result = orders[
+        orders["status"] == target_status
+    ].copy()
+    return result
+# 実行例：
+config = {
+    "target_status": "completed"
+}
+filtered = filter_orders(orders, config)
+# この設計では、関数の処理ロジックと処理条件を分離できます。
+#
+# ④ dict.get() と dict[] の違い
+# 設定値の取得方法には、主に2つあります。
+config = {
+    "target_status": "completed"
+}
+config["target_status"]      # → 指定したキーが存在しない場合、KeyError が発生します。
+config.get("target_status")  # → 指定したキーが存在しない場合、None を返します。
+# また、次のようにデフォルト値を指定することもできます。
+status = config.get("target_status", "completed")
+# この場合、target_status が存在しなければ "completed" を使用します。
+# ただし、必須の設定値には config["キー名"] を使用し、設定漏れを検知する設計も有効です。
+# 今回は、必要な設定が不足している場合に明確なエラーを発生させる方法を使用します。
+#
+# ⑤ ValueError による設定値の検証
+# STEP 3で学習した例外処理の復習です。
+def validate_status(status):
+    allowed_statuses = ["completed", "cancelled"]
+    if status not in allowed_statuses:
+        raise ValueError("不正なステータスです")
+    return True
+# 設定値が想定外の場合、処理を開始する前にエラーを発生させられます。
+# 設定管理では、設定値を受け取るだけでなく、その値が正しいかを検証することも重要です。
+
+# 演習用データ
+# 今回は、STEP 4-2と同じ注文データを使用します。
+orders
+customers
+# 今回使用する設定辞書は以下です。
+config = {
+    "target_status": "completed",
+    "sort_column": "customer_id",
+    "ascending": True
+}
+# 各設定の意味は次のとおりです。
+#   設定キー	        型	    用途
+#   target_status	str	    抽出対象の注文ステータス
+#   sort_column	    str	    最終結果の並べ替えに使用する列
+#   ascending	    bool	昇順ならTrue、降順ならFalse
+#
+# 今回のパイプライン構成
+#   設定辞書 config 抽出条件・並べ替え条件
+#     ↓
+#   ① 設定値の検証 validate_config()
+#     ↓
+#   ② 注文データの抽出 filter_orders_by_status()
+#     ↓
+#   ③ 顧客別集計・マスタ結合 STEP 4-1の関数を再利用
+#     ↓
+#   ④ 設定に従って並べ替え 最終DataFrame
+
+# 演習要件
+# 今回は、新しく3つの関数を実装してください。
+# 関数① validate_config(config)
+# 設定辞書を検証する関数です。
+# 要件：
+#   target_status、sort_column、ascending の3つのキーがすべて存在するか確認する。
+#   不足しているキーがある場合、ValueError を発生させ、不足しているキー名をエラーメッセージに含める。
+#   target_status が "completed" または "cancelled" のいずれかであることを確認する。
+#   sort_column が "customer_id"、"total_amount"、"order_count" のいずれかであることを確認する。
+#   ascending が bool 型（True または False）であることを確認する。
+#   設定がすべて正しい場合は True を返す。
+#   設定値が不正な場合は ValueError を発生させる。
+#   target_status と sort_column は文字列型であることも必要です。許可された文字列との比較によって検証できます。
+
+def validate_config(config):
+    allowed_statuses = ["target_status", "sort_column", "ascending"]
+    shortage = [key for key in allowed_statuses if key not in config]
+    if shortage:
+        raise ValueError(f"キー不足: {shortage}")
+    else:
+        check = (
+            config.get("target_status") in {"completed", "cancelled"}
+            and config.get("sort_column") in {"customer_id", "total_amount", "order_count"}
+            and isinstance(config.get("ascending"), bool)
+        )
+        if not check:
+            raise ValueError("設定値が不正")
+    return check
+
+# 関数② filter_orders_by_status(orders, target_status)
+# 指定されたステータスの注文だけを抽出する関数です。
+# 要件：
+#   orders["status"] が target_status と一致するレコードを抽出する。
+#   .copy() を使用してDataFrameのコピーを作成する。
+#   抽出結果を返す。
+# 今回は関数①で設定値を検証するため、この関数内でのステータス検証は不要です。
+
+def filter_orders_by_status(orders, target_status):
+    filtered = orders[
+        orders["status"] == target_status
+    ].copy()
+    return filtered
+
+# 関数③ run_pipeline_with_config(orders, customers, config)
+# 設定辞書を利用して、パイプライン全体を実行する関数です。
+# 要件：
+#   最初に validate_config(config) を実行する。
+#   config["target_status"] を使い、filter_orders_by_status() を実行する。
+#   抽出結果をSTEP 4-1の aggregate_customer_orders() に渡す。
+#   集計結果をSTEP 4-1の join_customer_master() に渡す。
+#   config["sort_column"] と config["ascending"] を使って最終結果を並べ替える。
+#   インデックスを0から振り直す。
+#   最終DataFrameを返す。
+# 今回は設定管理に集中するため、STEP 4-2のログ処理を組み込む必要はありません。
+# また、STEP 4-1の aggregate_customer_orders() と join_customer_master() は変更せずに再利用してください。
+
+def run_pipeline_with_config(orders, customers, config):
+    validate_config(config)
+    target_status = config["target_status"]
+    filterd = filter_orders_by_status(orders, target_status)
+    aggregate = aggregate_customer_orders(filterd)
+    result = join_customer_master(aggregate, customers)
+    result = result.sort_values(
+        config["sort_column"],
+        ascending=config["ascending"]
+    )
+    result = result.reset_index(drop=True)
+    return result
+
+# テストケース
+# テストケース1：設定を変更して結果が変わることを確認する
+# 以下の2つの設定辞書を用意してください。
+config_completed = {
+    "target_status": "completed",
+    "sort_column": "customer_id",
+    "ascending": True
+}
+
+config_cancelled = {
+    "target_status": "cancelled",
+    "sort_column": "total_amount",
+    "ascending": False
+}
+# それぞれの設定を使って、run_pipeline_with_config() を実行してください。
+# ① config_completed の期待結果
+#   customer_id	total_amount	order_count	customer_name
+#   C001	27000	2	田中
+#   C002	10000	1	佐藤
+#   C003	6000	1	鈴木
+#   C004	5000	1	未登録
+#
+# ② config_cancelled の期待結果
+#   customer_id	total_amount	order_count	customer_name
+#   C002	8000	1	佐藤
+#
+# 次の項目を assert で検証してください。
+#   完了注文の集計結果が4行であること。
+#   キャンセル注文の集計結果が1行であること。
+#   キャンセル注文の total_amount が8000であること。
+#   それぞれの結果が、指定した列・昇順または降順の条件に従って並べ替えられていること。
+# なお、キャンセル注文の結果は1行しかないため、降順の効果は見た目では確認できません。
+# 今回は設定値を使った sort_values() の実装をコードで確認します。
+
+testcase1_1 = run_pipeline_with_config(orders, customers, config_completed)
+print(testcase1_1)
+
+testcase1_2 = run_pipeline_with_config(orders, customers, config_cancelled)
+print(testcase1_2)
+
+assert len(testcase1_1) == 4, "行数が異なります"
+assert len(testcase1_2) == 1, "行数が異なります"
+assert testcase1_2["total_amount"].item() == 8000, "値が異なります"
+
+# テストケース2：不正な設定値の検証
+# 次の設定辞書を使用してください。
+config_invalid = {
+    "target_status": "unknown",
+    "sort_column": "customer_id",
+    "ascending": True
+}
+# validate_config(config_invalid) を実行し、ValueError が発生することを確認してください。
+# 検証要件：
+#   try / except ValueError を使用する。
+#   ValueError が発生した場合、エラーメッセージを表示する。
+#   ValueError が発生しなかった場合は、assert False などでテストを失敗させる。
+#   今回は、この不正な設定辞書1種類だけをテストしてください。その他の不正パターンのテストを追加する必要はありません。
+
+try:
+    validate_config(config_invalid)
+except ValueError as ve:
+    print(ve)
+else:
+    assert False, "ValueErrorが発生しませんでした"
 
 
+### STEP 4-4｜エラー処理
+#
+# 今回使うPython・pandasの知識
+# ① try / except による例外処理
+# Pythonでは、処理中に例外が発生した場合、通常はその時点で関数の実行が中断されます。
+# try / except を使用すると、発生した例外を捕捉し、その内容に応じた処理を実行できます。
+def divide(a, b):
+    try:
+        result = a / b
+        return result
+    except ZeroDivisionError as e:
+        print(f"計算エラー: {e}")
+        return None
+# この例では、ゼロ除算が発生した場合に例外を捕捉し、None を返します。
+#
+# ② 複数の例外を捕捉する
+# 例外には種類があり、原因に応じて異なる例外クラスが使用されます。
+try:
+    number = int("abc")
+except ValueError as e:
+    print(f"値が不正です: {e}")
+# ValueError は、値が不正な場合などに発生する例外です。
+# pandasでは、例えば merge() の結合関係が validate の指定に違反した場合、pandas.errors.MergeError が発生します。
+#
+# ③ logging.exception() によるエラーログ
+# これまで使用した logging.info()、logging.warning()、logging.error() に加えて、例外処理で便利なのが logging.exception() です。
+import logging
+try:
+    int("abc")
+except ValueError:
+    logging.exception("数値変換に失敗しました")
+# logging.exception() は、エラーメッセージに加えて、例外の発生箇所を追跡するための情報も記録します。
+# パイプラインでは、エラーを捕捉することと、エラー発生後に処理を継続するか中断するかを決めることが重要です。
+
+# 演習問題
+# STEP 4-3で作成した run_pipeline_with_config() にエラー処理を追加し、
+# 処理が成功した場合と失敗した場合の結果を、一定の形式で返す関数を作成してください。
+# STEP 4-3までに作成した以下の関数を利用します。
+def validate_config(config):
+    allowed_statuses = ["target_status", "sort_column", "ascending"]
+    shortage = [key for key in allowed_statuses if key not in config]
+    if shortage:
+        raise ValueError(f"キー不足: {shortage}")
+    else:
+        check = (
+            config.get("target_status") in {"completed", "cancelled"}
+            and config.get("sort_column") in {"customer_id", "total_amount", "order_count"}
+            and isinstance(config.get("ascending"), bool)
+        )
+        if not check:
+            raise ValueError("設定値が不正")
+    return check
+
+def filter_orders_by_status(orders, target_status):
+    filtered = orders[
+        orders["status"] == target_status
+    ].copy()
+    return filtered
+
+def aggregate_customer_orders(completed):
+    aggregate = completed.groupby(
+        "customer_id",
+        as_index=False  # 指定したキー（ここでは customer_id）をインデックス列としない =DataFrameに含まれる通常の列とする
+    ).agg(
+        total_amount=("amount", "sum"),
+        order_count=("order_id", "count")
+    )
+    return aggregate
+
+def join_customer_master(aggregate, customers):
+    joined = aggregate.merge(
+        customers,
+        on="customer_id",
+        how="left",
+        validate="many_to_one",
+    )
+    joined["customer_name"] = joined["customer_name"].fillna("未登録")
+    return joined
+
+def run_pipeline_with_config(orders, customers, config):
+    validate_config(config)
+    target_status = config["target_status"]
+    filterd = filter_orders_by_status(orders, target_status)
+    aggregate = aggregate_customer_orders(filterd)
+    result = join_customer_master(aggregate, customers)
+    result = result.sort_values(
+        config["sort_column"],
+        ascending=config["ascending"]
+    )
+    result = result.reset_index(drop=True)
+    return result
+
+# 新しく作成する関数
+def run_pipeline_with_error_handling(orders, customers, config):
+    report = {}
+    try:
+        result = run_pipeline_with_config(orders, customers, config)
+    except ValueError as ve:
+        report["status"] = "ERROR"
+        report["data"] = None
+        report["error"] = str(ve)
+        logging.exception("パイプラインの処理失敗")
+        return report
+    except KeyError as ke:
+        report["status"] = "ERROR"
+        report["data"] = None
+        report["error"] = f"キーが見つかりません: {str(ke)}"
+        logging.exception("パイプラインの処理失敗")
+        return report
+    else:
+        report["status"] = "OK"
+        report["data"] = result
+        report["error"] = None
+        logging.info("パイプラインの処理完了")
+    return report
+
+# 要件
+#   run_pipeline_with_config() を呼び出し、既存のパイプラインを実行する。
+#   try / except を使用して、実行中に発生する ValueError と KeyError を捕捉する。
+#   正常終了した場合は、次の辞書を返す。
+#     status："OK"
+#     data：パイプラインの処理結果（DataFrame）
+#     error：None
+#   例外が発生した場合は、次の辞書を返す。
+#     status："ERROR"
+#     data：None
+#     error：発生した例外のメッセージ（文字列）
+#   正常終了時は logging.info()、例外発生時は logging.exception() でログを出力する。
+#   エラーが発生した場合は、後続のパイプライン処理を実行しない。
+# 今回は既存の集計・結合・設定管理のロジックを書き換える必要はありません。
+# 新しい関数から既存のパイプラインを呼び出し、その実行結果と例外を管理してください。
+
+# テストケース
+# テストケース①：正常終了
+config1 = {
+    "target_status": "completed",
+    "sort_column": "total_amount",
+    "ascending": False
+}
+result1 = run_pipeline_with_error_handling(orders, customers, config1)
+print(result1)
+# 期待する結果：
+#   result["status"] == "OK"
+#   result["data"] に処理結果のDataFrameが格納されている。
+#   result["error"] is None
+#   INFOログが出力される。
+
+# テストケース②：不正な設定値
+config2 = {
+    "target_status": "unknown",
+    "sort_column": "total_amount",
+    "ascending": False
+}
+result2 = run_pipeline_with_error_handling(orders, customers, config2)
+print(result2)
+# 期待する結果：
+#   result["status"] == "ERROR"
+#   result["data"] is None
+#   result["error"] に例外メッセージが格納されている。
+#   エラーログが出力される。
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+### STEP 4-5｜再実行
+# 今回は、一度実行したパイプラインを、同じ入力データ・同じ設定で再実行した場合に、結果が変わらないことを確認する仕組みを実装します。
+#
+# 今回使うPython・pandasの知識
+# ① 冪等性（べきとうせい）
+# データエンジニアリングでは、同じ処理を再実行することがあります。
+# 例えば、パイプラインの実行中に障害が発生した場合や、処理結果を再作成したい場合です。
+# 冪等性とは、同じ処理を繰り返しても、最終的な結果が変わらない性質です。
+# 今回の演習では、同じ入力データと設定で2回実行し、得られたDataFrameが一致することを確認します。
+# ただし、これは再実行結果の一致を確認する演習で、データベースへの重複書き込み防止などを含む冪等性ではありません。
+#
+# ② DataFrame.equals()
+# pandasの equals() は、2つのDataFrameの内容が一致しているかを判定するメソッドです。
 
 
 

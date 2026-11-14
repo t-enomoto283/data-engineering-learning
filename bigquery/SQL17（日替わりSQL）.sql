@@ -278,3 +278,42 @@ FROM prev_daily_plus
 ORDER BY session_date ASC;
 
 
+/*
+日替わりSQL：日別注文数と累計注文数（ウィンドウ関数）
+
+使用テーブル
+  `resonant-tract-508812-p9.sql_training.training16_orders`
+
+注文ステータスが completed の注文について、日別注文数と、その日までの累計注文数を取得してください。
+
+取得する列
+  order_date：注文日
+  daily_orders：その日の注文数
+  cumulative_orders：その日までの累計注文数
+
+条件
+  status = 'completed' の注文のみを対象とする。
+  order_date ごとに注文数を集計する。
+  SUM() OVER() を使用して、日付順に累計注文数を計算する。
+  累計計算では ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW を明示する。
+  最終結果は order_date の昇順とする。
+*/
+WITH filter_order AS (
+  SELECT
+    order_date,
+    COUNT(order_id) AS daily_orders
+  FROM `resonant-tract-508812-p9.sql_training.training16_orders`
+  WHERE status = 'completed'
+  GROUP BY order_date
+)
+SELECT
+  order_date,
+  daily_orders,
+  SUM(daily_orders) OVER (
+    ORDER BY order_date ASC
+    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  ) AS cumulative_orders
+FROM filter_order
+ORDER BY order_date ASC;
+
+
