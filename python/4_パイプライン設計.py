@@ -904,40 +904,421 @@ print(result2)
 #
 # ② DataFrame.equals()
 # pandasの equals() は、2つのDataFrameの内容が一致しているかを判定するメソッドです。
+import pandas as pd
+df1 = pd.DataFrame(
+    {"customer_id": ["C001", "C002"],
+    "amount": [1000, 2000]}
+)
+df2 = pd.DataFrame(
+    {"customer_id": ["C001", "C002"],
+    "amount": [1000, 2000]}
+)
+print(df1.equals(df2))  # True
+# 値だけでなく、行・列の順序やインデックスなども比較対象になります。
+# なお、対応する値の欠損が両方とも同じ位置にある場合は、一致として扱われます。
+#
+# ③ DataFrame.copy()
+# DataFrameを加工するとき、元データを意図せず変更しないことも重要です。
+df = pd.DataFrame(
+    {"amount": [1000, 2000]}
+)
+df_copy = df.copy()
+df_copy["amount"] = df_copy["amount"] * 2
+print(df)  # 1000 2000
+# 元の df の値は変更されません。
+# 再実行時に入力データが変化してしまうと、同じ条件での比較ができなくなるため、入力データを保持することが重要です。
+
+# 演習問題
+# STEP 4-4で作成した run_pipeline_with_error_handling() を利用して、
+# 同じ入力データと設定でパイプラインを2回実行し、結果の一致を検証する関数を作成してください。
+# 使用する既存関数
+def run_pipeline_with_error_handling(orders, customers, config):
+    report = {}
+    try:
+        result = run_pipeline_with_config(orders, customers, config)
+    except ValueError as ve:
+        report["status"] = "ERROR"
+        report["data"] = None
+        report["error"] = str(ve)
+        logging.exception("パイプラインの処理失敗")
+        return report
+    except KeyError as ke:
+        report["status"] = "ERROR"
+        report["data"] = None
+        report["error"] = f"キーが見つかりません: {str(ke)}"
+        logging.exception("パイプラインの処理失敗")
+        return report
+    else:
+        report["status"] = "OK"
+        report["data"] = result
+        report["error"] = None
+        logging.info("パイプラインの処理完了")
+    return report
+
+run_pipeline_with_error_handling(orders, customers, config)
+
+# この関数は、以下の形式の辞書を返します。
+# 正常終了時：
+# {
+#     "status": "OK",
+#     "data": 処理結果のDataFrame,
+#     "error": None
+# }
+# 異常終了時：
+# {
+#     "status": "ERROR",
+#     "data": None,
+#     "error": "エラーメッセージ"
+# }
+
+# 新しく作成する関数
+def verify_pipeline_rerun(orders, customers, config):
+    report = {}
+    rerun1 = run_pipeline_with_error_handling(orders, customers, config)
+    rerun2 = run_pipeline_with_error_handling(orders, customers, config)
+    rerun1_status = rerun1["status"] == "OK"
+    rerun2_status = rerun2["status"] == "OK"
+    if rerun1_status and rerun2_status:
+        is_identical = rerun1["data"].equals(rerun2["data"])
+        if is_identical:
+            report["status"] = "OK"
+            report["is_identical"] = is_identical
+            report["error"] = None
+            logging.info("正常に一致")
+        else:
+            report["status"] = "WARNING"
+            report["is_identical"] = is_identical
+            report["error"] = None
+            logging.warning("不一致")
+    elif rerun1["status"] == "ERROR":
+        report["status"] = "ERROR"
+        report["is_identical"] = None
+        report["error"] = rerun1["error"]
+        logging.error("エラー")
+    elif rerun2["status"] == "ERROR":
+        report["status"] = "ERROR"
+        report["is_identical"] = None
+        report["error"] = rerun2["error"]
+        logging.error("エラー")
+    return report
+
+# 演習要件
+#   今回は既存のパイプラインの集計・結合・設定管理・エラー処理を書き換える必要はありません。
+#   run_pipeline_with_error_handling() を使用して、同じ orders、customers、config でパイプラインを2回実行する。
+#   それぞれの実行結果から status を確認する。
+#   両方とも "OK" の場合は、DataFrame.equals() を使用して2つの処理結果を比較する。
+#   両方とも正常終了し、DataFrameが一致した場合は、次の辞書を返す。
+#     status："OK"
+#     is_identical：True
+#     error：None
+#   両方とも正常終了したが、DataFrameが一致しない場合は、次の辞書を返す。
+#     status："WARNING"
+#     is_identical：False
+#     error：None
+#   いずれかの実行で "ERROR" が返された場合は、次の辞書を返す。
+#     status："ERROR"
+#     is_identical：None
+#     error：エラーとなった実行結果の error の文字列
+#   正常に一致した場合は logging.info()、不一致の場合は logging.warning()、エラーの場合は logging.error() を使用してログを出力する。
+
+# テストケース
+# テストケース①：正常な設定での再実行
+config1 = {
+    "target_status": "completed",
+    "sort_column": "total_amount",
+    "ascending": False
+}
+result1 = verify_pipeline_rerun(orders, customers, config1)
+print(result1)
+# 期待する結果：
+# {
+#     "status": "OK",
+#     "is_identical": True,
+#     "error": None
+# }
+
+# テストケース②：不正な設定での再実行
+config2 = {
+    "target_status": "unknown",
+    "sort_column": "total_amount",
+    "ascending": False
+}
+result2 = verify_pipeline_rerun(orders, customers, config2)
+print(result2)
+# 期待する結果：
+# {
+#     "status": "ERROR",
+#     "is_identical": None,
+#     "error": "設定値が不正"
+# }
 
 
+### STEP 4-6：パイプライン統合
+# 今回は、STEP 4-1〜4-5で実装してきた機能を組み合わせ、
+# データの加工・集計・結合から、エラー処理、再実行結果の検証までを一連の処理として管理する関数を作成します。
+#
+# 今回使うPython・pandasの知識
+# ① 関数の組み合わせ
+# データパイプラインでは、処理を1つの巨大な関数にまとめるのではなく、役割ごとに分割した関数を組み合わせます。
+# 例えば、次のような構成です。
+def process_data(df):
+    return df.dropna()
 
+def summarize_data(df):
+    return df.groupby(
+        "category",
+        as_index=False
+    )["amount"].sum()
 
+def execute(df):
+    cleaned = process_data(df)
+    summary = summarize_data(cleaned)
+    return summary
+# execute() は個々の加工処理を直接記述せず、既存の関数を呼び出して処理全体を管理しています。
+# このように、複数の処理を適切な順序で実行・管理することを、パイプラインのオーケストレーションと呼びます。
+#
+# ② 関数の戻り値を次の処理に渡す
+# 前の関数の戻り値を、次の処理で使用できます。
+def multiply(x):
+    return x * 2
 
+def add_ten(x):
+    return x + 10
 
+value = multiply(5)
+result = add_ten(value)
+print(result)  # 20
+# パイプラインでも同様に、データ加工の結果や処理ステータスを後続の処理に渡します。
+#
+# ③ 辞書による処理結果の統合
+# 複数の関数が返す情報を、1つの辞書にまとめられます。
+processing = {
+    "status": "OK",
+    "data": [10, 20, 30]
+}
 
+validation = {
+    "status": "OK",
+    "is_valid": True
+}
 
+report = {
+    "processing_status": processing["status"],
+    "validation_status": validation["status"],
+    "data": processing["data"]
+}
+# 今回はこの考え方を使い、パイプラインの実行結果と再実行検証の結果を統合します。
 
+# 演習問題
+# これまでに作成したパイプラインの実行機能と再実行検証機能を組み合わせ、処理全体の結果を1つの辞書で返す関数を作成してください。
+# 使用する既存関数
+# STEP 4-4で作成した関数：run_pipeline_with_error_handling(orders, customers, config)
+# STEP 4-5で作成した関数：verify_pipeline_rerun(orders, customers, config)
 
+# 設定辞書を検証する関数
+def validate_config(config):
+    allowed_statuses = ["target_status", "sort_column", "ascending"]
+    shortage = [key for key in allowed_statuses if key not in config]
+    if shortage:
+        raise ValueError(f"キー不足: {shortage}")
+    else:
+        check = (
+            config.get("target_status") in {"completed", "cancelled"}
+            and config.get("sort_column") in {"customer_id", "total_amount", "order_count"}
+            and isinstance(config.get("ascending"), bool)
+        )
+        if not check:
+            raise ValueError("設定値が不正")
+    return check
 
+# 指定されたステータスの注文だけを抽出する関数
+def filter_orders_by_status(orders, target_status):
+    filtered = orders[
+        orders["status"] == target_status
+    ].copy()
+    return filtered
 
+# 完了注文を顧客別に集計する関数
+def aggregate_customer_orders(completed):
+    aggregate = completed.groupby(
+        "customer_id",
+        as_index=False  # 指定したキー（ここでは customer_id）をインデックス列としない =DataFrameに含まれる通常の列とする
+    ).agg(
+        total_amount=("amount", "sum"),
+        order_count=("order_id", "count")
+    )
+    return aggregate
 
+# 集計結果に顧客名を付与する関数
+def join_customer_master(aggregate, customers):
+    joined = aggregate.merge(
+        customers,
+        on="customer_id",
+        how="left",
+        validate="many_to_one",
+    )
+    joined["customer_name"] = joined["customer_name"].fillna("未登録")
+    return joined
 
+# 設定辞書を利用して各パイプラインを実行する関数
+def run_pipeline_with_config(orders, customers, config):
+    validate_config(config)
+    target_status = config["target_status"]
+    filterd = filter_orders_by_status(orders, target_status)
+    aggregate = aggregate_customer_orders(filterd)
+    result = join_customer_master(aggregate, customers)
+    result = result.sort_values(
+        config["sort_column"],
+        ascending=config["ascending"]
+    )
+    result = result.reset_index(drop=True)
+    return result
 
+# エラー処理を追加してパイプラインが成功した場合と失敗した場合の結果を一定形式で返す関数
+def run_pipeline_with_error_handling(orders, customers, config):
+    report = {}
+    try:
+        result = run_pipeline_with_config(orders, customers, config)
+    except ValueError as ve:
+        report["status"] = "ERROR"
+        report["data"] = None
+        report["error"] = str(ve)
+        logging.exception("パイプラインの処理失敗")
+        return report
+    except KeyError as ke:
+        report["status"] = "ERROR"
+        report["data"] = None
+        report["error"] = f"キーが見つかりません: {str(ke)}"
+        logging.exception("パイプラインの処理失敗")
+        return report
+    else:
+        report["status"] = "OK"
+        report["data"] = result
+        report["error"] = None
+        logging.info("パイプラインの処理完了")
+    return report
 
+# 同じ入力データと設定でパイプラインを2回実行して結果の一致を検証する関数
+def verify_pipeline_rerun(orders, customers, config):
+    report = {}
+    rerun1 = run_pipeline_with_error_handling(orders, customers, config)
+    rerun2 = run_pipeline_with_error_handling(orders, customers, config)
+    rerun1_status = rerun1["status"] == "OK"
+    rerun2_status = rerun2["status"] == "OK"
+    if rerun1_status and rerun2_status:
+        is_identical = rerun1["data"].equals(rerun2["data"])
+        if is_identical:
+            report["status"] = "OK"
+            report["is_identical"] = is_identical
+            report["error"] = None
+            logging.info("正常に一致")
+        else:
+            report["status"] = "WARNING"
+            report["is_identical"] = is_identical
+            report["error"] = None
+            logging.warning("不一致")
+    elif rerun1["status"] == "ERROR":
+        report["status"] = "ERROR"
+        report["is_identical"] = None
+        report["error"] = rerun1["error"]
+        logging.error("エラー")
+    elif rerun2["status"] == "ERROR":
+        report["status"] = "ERROR"
+        report["is_identical"] = None
+        report["error"] = rerun2["error"]
+        logging.error("エラー")
+    return report
 
+# これらの関数は変更せず、そのまま使用してください。
+# 新しく作成する関数
+def run_integrated_pipeline(orders, customers, config):
+    final_report = {}
+    pipeline_done = run_pipeline_with_error_handling(orders, customers, config)
+    if pipeline_done["status"] == "ERROR":
+        final_report["status"] = pipeline_done["status"]
+        final_report["data"] = pipeline_done["data"]
+        final_report["is_identical"] = None
+        final_report["error"] = pipeline_done["error"]
+        logging.error("実行失敗")
+        return final_report
+    else:
+        rerun_done = verify_pipeline_rerun(orders, customers, config)
+        if rerun_done["status"] == "ERROR":
+            final_report["status"] = rerun_done["status"]
+            final_report["data"] = None
+            final_report["is_identical"] = rerun_done["is_identical"]
+            final_report["error"] = rerun_done["error"]
+            logging.error("実行失敗")
+        elif rerun_done["status"] == "WARNING":
+            final_report["status"] = rerun_done["status"]
+            final_report["data"] = pipeline_done["data"]
+            final_report["is_identical"] = rerun_done["is_identical"]
+            final_report["error"] = rerun_done["error"]
+            logging.warning("不一致")
+        else:
+            final_report["status"] = rerun_done["status"]
+            final_report["data"] = pipeline_done["data"]
+            final_report["is_identical"] = rerun_done["is_identical"]
+            final_report["error"] = rerun_done["error"]
+            logging.info("正常に一致")
+    return final_report
 
+# 演習要件
+#   run_pipeline_with_error_handling() を呼び出し、パイプラインを実行する。
+#   実行結果の status が "ERROR" の場合は、再実行検証を行わず、エラー結果を返す。
+#   実行が正常終了した場合は、verify_pipeline_rerun() を呼び出し、再実行結果を検証する。
+#   実行結果と再実行検証結果を組み合わせ、以下の辞書を返す。
+# 最終的な戻り値：
+#   キー	            内容
+#   status	        統合処理全体のステータス
+#   data	        パイプラインの処理結果（DataFrameまたはNone）
+#   is_identical	再実行結果の一致判定（True / False / None）
+#   error	        エラーメッセージまたはNone
+#
+# status は以下の規則で設定してください。
+#   状況	                    status	    data	 is_identical	error
+#   実行成功・再実行結果一致	    "OK"	    処理結果	 True	        None
+#   実行成功・再実行結果不一致	"WARNING"	処理結果	 False	        None
+#   パイプライン実行失敗	    "ERROR"	    None	 None	        実行時のエラー
+#   再実行検証失敗	            "ERROR"	    None	 None	        検証時のエラー
+#
+# 統合処理が正常終了した場合は logging.info()、不一致の場合は logging.warning()、エラーの場合は logging.error() でログを出力する。
+# 既存の関数内部の処理を書き直す必要はありません。エラー発生時には、その後の不要な処理を実行しないでください。
+# verify_pipeline_rerun() は内部でパイプラインを2回実行なので、今回の統合関数が正常終了＝パイプライン計3回実行ですが今回の演習では無問題。
 
+# テストケース
+# テストケース①：正常な設定での統合実行
+config1 = {
+    "target_status": "completed",
+    "sort_column": "total_amount",
+    "ascending": False
+}
+result1 = run_integrated_pipeline(orders, customers, config1)
+print(result1)
+# 期待する結果：
+# {
+#     "status"："OK"
+#     "data"：顧客別の集計結果が格納されたDataFrame
+#     "is_identical"：True
+#     "error"：None
+# }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# テストケース②：不正な設定での統合実行
+config2 = {
+    "target_status": "unknown",
+    "sort_column": "total_amount",
+    "ascending": False
+}
+result2 = run_integrated_pipeline(orders, customers, config2)
+print(result2)
+# 期待する結果：
+# {
+#     "status": "ERROR",
+#     "data": None,
+#     "is_identical": None,
+#     "error": "設定値が不正"
+# }
+# この場合、最初のパイプライン実行でエラーが検出されるため、再実行検証は行われません。
 
 
 
