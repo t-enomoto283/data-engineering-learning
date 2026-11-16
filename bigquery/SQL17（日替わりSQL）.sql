@@ -349,7 +349,17 @@ FROM `resonant-tract-508812-p9.sql_training.training16_orders`
 ORDER BY customer_id ASC, order_date DESC, order_id DESC;
 
 
-
+/*
+python・pandasの「STEP 5-5｜BigQueryへの書き込み」における関数 load_aggregated_sales_to_bigquery を実行して
+書き込み先テーブルが存在しない場合BigQueryのロードジョブにより新規作成される
+resonant-tract-508812-p9.sql_training.step5_5_sales_summary について
+書き込まれた内容を確認する目的のクエリ
+*/
+SELECT
+  product_id,
+  total_sales
+FROM `resonant-tract-508812-p9.sql_training.step5_5_sales_summary`
+ORDER BY total_sales DESC;
 
 
 

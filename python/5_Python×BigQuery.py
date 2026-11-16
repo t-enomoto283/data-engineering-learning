@@ -483,7 +483,7 @@ print(result2)
 
 # 使用するデータ
 # PythonからBigQueryのSQL実行では、次のSQLを使用してください。
-"""
+sql1 = """
 SELECT 'A' AS product_id, 100 AS sales
 UNION ALL
 SELECT 'A' AS product_id, 200 AS sales
@@ -528,6 +528,50 @@ SELECT 'C' AS product_id, 400 AS sales
 # }
 # 異常終了時は、row_count を 0、columns と rows を空リストにしてください。
 
+def aggregate_bigquery_sales(project_id, sql):
+    try:
+        client = bigquery.Client(
+            project=project_id
+        )
+        query_job = client.query(sql)
+        df = query_job.result().to_dataframe(
+            create_bqstorage_client=False
+        )
+        summary = df.groupby(
+            "product_id",
+            as_index=False
+        ).agg(
+            total_sales=("sales", "sum")
+        )
+        summary = summary.sort_values(
+            "total_sales",
+            ascending=False
+        )
+        summary = summary.reset_index(drop=True)
+        row_count = summary.shape[0]
+        columns = summary.columns.tolist()
+        result = summary.to_dict(orient="records")
+    except Exception as e:
+        logging.exception("処理失敗")
+        return {
+            "status": "ERROR",
+            "project_id": project_id,
+            "row_count": 0,
+            "columns": [],
+            "rows": [],
+            "error": str(e)
+        }
+    else:
+        logging.info("処理成功")
+        return {
+            "status": "OK",
+            "project_id": project_id,
+            "row_count": row_count,
+            "columns": columns,
+            "rows": result,
+            "error": None
+        }
+
 # テストケース
 # テストケース①：正常系
 # 先般のSQLを実行し、商品別の売上集計が正しく行われることを確認してください。
@@ -538,9 +582,12 @@ SELECT 'C' AS product_id, 400 AS sales
 #   A	300
 # status は "OK"、row_count は 3、error は None となること。
 
+case1 = aggregate_bigquery_sales("resonant-tract-508812-p9", sql1)
+print(case1)
+
 # テストケース②：異常系
 # 以下の不正なSQLを渡してください。
-"SELEC 'A' AS product_id, 100 AS sales"
+sql2 = "SELEC 'A' AS product_id, 100 AS sales"
 # 期待される結果：
 #   status が "ERROR" となる。
 #   row_count が 0 となる。
@@ -548,15 +595,254 @@ SELECT 'C' AS product_id, 400 AS sales
 #   error にBigQueryのエラー内容が格納される。
 #   logging.exception() で例外が記録される。
 
+case2 = aggregate_bigquery_sales("resonant-tract-508812-p9", sql2)
+print(case2)
 
 
+### STEP 5-5｜BigQueryへの書き込み
+# STEP 5-4では、BigQueryから取得した売上明細をpandasで商品別に集計しました。
+# 今回は、その集計結果をBigQueryのテーブルに保存します。これにより、Pythonを使用した次の一連の処理を実装します。
+#
+#   BigQueryからデータ取得：SQL実行 → DataFrame変換
+#     ↓
+#   pandasでデータ加工：商品別の売上集計・並べ替え
+#     ↓
+#   BigQueryへデータ保存：加工済みDataFrameを書き込み
+#
+# 今回使うPython・pandasの知識
+# ① bigquery.LoadJobConfig()
+# BigQueryへデータを書き込む際の設定をまとめるためのクラスです。
+# 例えば、次のような設定ができます。
+#   - 既存テーブルにデータを追加するか、上書きするか
+#   - テーブルのカラム名やデータ型をどのように定義するか
+#   - 書き込み先のテーブルが存在しない場合に作成するか
+# 今回使用するのは、既存データを上書きするかどうかの設定です。
+# 基本的な書き方：
+job_config = bigquery.LoadJobConfig(
+    write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
+)
+# このコードでは、LoadJobConfig() で設定オブジェクトを作成し、write_disposition に書き込み方法を指定しています。
+# job_config という変数に格納して、後ほど書き込み処理へ渡します。
+#
+# ② WRITE_TRUNCATE
+# BigQueryのテーブルへデータを書き込む際、既存のデータをどう扱うかを決める設定です。
+# 代表的な設定は次の3つです。
+#   設定	            動作
+#   WRITE_APPEND	既存テーブルにデータを追加する
+#   WRITE_TRUNCATE	既存テーブルの内容を置き換える
+#   WRITE_EMPTY	    既存テーブルにデータがある場合、書き込みを失敗させる
+# 例えば、BigQueryに次のテーブルがあるとします。
+#   書き込み前
+#   product_id	total_sales
+#   A	        100
+#   B	        200
+# Pythonから新しい集計結果を書き込みます。
+#   今回書き込むデータ
+#   product_id	total_sales
+#   A	        300
+#   C	        400
+# WRITE_TRUNCATE を指定すると、書き込み成功後のテーブルは次のようになります。
+#   書き込み後
+#   product_id	total_sales
+#   A	        300
+#   C	        400
+# 元の A=100 と B=200 は残りません。つまり既存テーブルの全データを新しいデータで置き換える設定です。
+# 今回の演習では、集計結果を毎回最新の状態に置き換えることを想定し、WRITE_TRUNCATE を使用します。
+# 注意：
+# WRITE_TRUNCATE は既存データを置き換えるため、誤ったテーブルIDを指定すると重要なデータを失う可能性があります。
+# 今回は専用の学習用テーブルだけを使用してください。
+#
+# ③ load_table_from_dataframe()
+# pandasのDataFrameをBigQueryのテーブルに書き込むためのメソッドです。
+# 基本的な書き方：
+load_job = client.load_table_from_dataframe(
+    dataframe=summary,
+    destination=destination_table,
+    job_config=job_config
+)
+# 各引数の意味は次のとおりです。
+#   引数	        意味
+#   dataframe	BigQueryへ保存するDataFrame
+#   destination	書き込み先テーブルID
+#   job_config	書き込み方法などの設定
+#
+# 例えば、summary が商品別売上を集計したDataFrameであれば、そのDataFrameの内容を指定したBigQueryテーブルに保存できます。
+# ここで重要なのは、このメソッドが返すのは、書き込み結果のDataFrameではなく、ロードジョブを表すオブジェクトだという点です。
+# そのため、次の完了確認が必要になります。
+#
+# ④ load_job.result()
+# STEP 5-3で使用した次の処理を覚えていると思います。
+query_job = client.query(sql)
+df = query_job.result().to_dataframe(
+    create_bqstorage_client=False
+)
+# これは query_job.result() によってSQLの実行完了を待ち、その結果をDataFrameに変換しました。今回も考え方は同じです。
+load_job.result()
+# ただし、対象となるジョブが異なります。
+#   処理	                対象	        目的
+#   query_job.result()	クエリジョブ	SQLの実行完了を待つ
+#   load_job.result()	ロードジョブ	BigQueryへの書き込み完了を待つ
+# load_table_from_dataframe() を呼び出しただけでは、書き込み処理が正常終了したとは限りません。
+# load_job.result() によってジョブの完了を待ち、書き込みに失敗した場合は例外を受け取れます。
+# 今回の課題では、書き込み完了を確認してから正常終了の辞書を返すようにしてください。
 
+# 課題
+# BigQueryから取得した売上明細をpandasで商品別に集計し、その集計結果をBigQueryの学習用テーブルへ保存する関数を実装。
+# 今回は、取得 → 加工 → 保存を1つの関数で実行できるようにすることが目的です。
 
+# 使用するデータ
+# STEP 5-4と同じ内容である次のSQLを使用します。
+sql1 = """
+SELECT 'A' AS product_id, 100 AS sales
+UNION ALL
+SELECT 'A' AS product_id, 200 AS sales
+UNION ALL
+SELECT 'B' AS product_id, 300 AS sales
+UNION ALL
+SELECT 'B' AS product_id, 150 AS sales
+UNION ALL
+SELECT 'C' AS product_id, 400 AS sales
+"""
 
+# 実装要件
+# 関数名：
+#   load_aggregated_sales_to_bigquery
+# 引数：
+#   引数	                内容
+#   project_id	        BigQueryのプロジェクトID
+#   sql	                データ取得用SQL
+#   destination_table	書き込み先テーブルID
+# 処理内容：
+#   bigquery.Client() でBigQueryに接続する。
+#   引数 sql を実行し、結果をDataFrameとして取得する。
+#   product_id ごとに sales を合計し、total_sales 列を作成する。
+#   total_sales の降順に並べ替え、インデックスを整理する。
+#   bigquery.LoadJobConfig() で書き込み方法を WRITE_TRUNCATE に設定する。
+#   load_table_from_dataframe() を使用して、集計後のDataFrameを指定したBigQueryテーブルへ書き込む。
+#   load_job.result() で書き込みジョブの完了を確認する。
+#   正常系・異常系の結果を辞書として返し、logging で処理結果を記録する。
+# 戻り値の形式：
+# {
+#     "status": "OK" または "ERROR",
+#     "project_id": プロジェクトID,
+#     "destination_table": 書き込み先テーブルID,
+#     "row_count": 書き込んだ行数,
+#     "error": None または エラーメッセージ
+# }
+# 異常終了時の row_count は 0 としてください。なお、row_count は書き込みが正常に完了した場合の、集計後DataFrameの行数とします。
 
+# 書き込み先テーブル
+# 今回は、以下の学習用テーブルを使用します。
+# 書き込み先テーブルID：
+#   resonant-tract-508812-p9.sql_training.step5_5_sales_summary
+# データセット sql_training は既に存在しているものとして進めます。
+# 書き込み先テーブル自体は、存在しなければBigQueryのロードジョブによって新規作成されます（テーブル作成権限がある場合）。
+# 既存の演習テーブルを誤って上書きしないよう、書き込み先は必ず上記のテーブルIDを指定してください。
 
+def load_aggregated_sales_to_bigquery(project_id, sql, destination_table):
+    try:
+        # BigQuery接続・SQL実行
+        client = bigquery.Client(
+            project=project_id
+        )
+        query_job = client.query(sql)
 
+        # 実行結果のDataFrame変換・データ加工
+        df = query_job.result().to_dataframe(
+            create_bqstorage_client=False
+        )
+        summary = df.groupby(
+            "product_id",
+            as_index=False
+        ).agg(
+            total_sales=("sales", "sum")
+        )
+        summary = summary.sort_values(
+            "total_sales",
+        ascending=False
+        )
+        summary = summary.reset_index(drop=True)
 
+        # BigQueryへのデータ書き込み設定・加工済みDataFrameの書き込み
+        job_config = bigquery.LoadJobConfig(
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE  # 既存テーブルの内容を置き換える
+        )
+        load_job = client.load_table_from_dataframe(
+            dataframe=summary,
+            destination=destination_table,  # 書き込み先テーブルが存在しない場合BigQueryのロードジョブにより新規作成（権限がある場合）
+            job_config=job_config
+        )
+        load_job.result()  # 書き込みのジョブ完了を待つ
+
+    except Exception as e:
+        logging.exception("処理失敗")
+        return {
+            "status": "ERROR",
+            "project_id": project_id,
+            "destination_table": destination_table,
+            "row_count": 0,
+            "error": str(e)
+        }
+    else:
+        logging.info("処理成功")
+        return {
+            "status": "OK",
+            "project_id": project_id,
+            "destination_table": destination_table,
+            "row_count": summary.shape[0],
+            "error": None
+        }
+
+# テストケース
+# テストケース①：正常系
+# 先般の指定したSQL（sql1）を使用して集計処理を実行し、BigQueryへ書き込んでください。
+# 期待される集計結果：
+#   product_id	total_sales
+#   B	450
+#   C	400
+#   A	300
+# 期待される戻り値：
+#   キー	                期待値
+#   status	            "OK"
+#   project_id	        指定したプロジェクトID
+#   destination_table	指定したテーブルID
+#   row_count	        3
+#   error	            None
+# また、BigQueryのSQLエディタで、保存先テーブルの内容を確認してください。
+# 確認用SQL：
+#   SELECT
+#     product_id,
+#     total_sales
+#   FROM `resonant-tract-508812-p9.sql_training.step5_5_sales_summary`
+#   ORDER BY total_sales DESC;
+# 3行の集計結果が保存されていれば成功です。
+
+case1 = load_aggregated_sales_to_bigquery(
+    "resonant-tract-508812-p9",
+    sql1,
+    "resonant-tract-508812-p9.sql_training.step5_5_sales_summary"
+)
+print(case1)
+
+# テストケース②：異常系
+# 次の不正なSQLを第二引数として関数に渡してください。
+sql2 = "SELEC 'A' AS product_id, 100 AS sales"
+# 期待される戻り値：
+#   キー	                期待値
+#   status	            "ERROR"
+#   project_id	        指定したプロジェクトID
+#   destination_table	指定したテーブルID
+#   row_count	        0
+#   error	            BigQueryのエラーメッセージ
+# また、logging.exception() によってエラーが記録されることを確認してください。
+# 今回の異常系ではSQL実行時点で失敗するため、書き込み処理には到達しません。
+
+case2 = load_aggregated_sales_to_bigquery(
+    "resonant-tract-508812-p9",
+    sql2,
+"resonant-tract-508812-p9.sql_training.step5_5_sales_summary"
+)
+print(case2)
 
 
 
