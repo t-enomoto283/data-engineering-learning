@@ -317,3 +317,39 @@ FROM filter_order
 ORDER BY order_date ASC;
 
 
+/*
+日替わりSQL：BigQuery Standard SQL｜SELECT問題｜ウィンドウ関数
+
+使用テーブル
+  resonant-tract-508812-p9.sql_training.training16_orders
+
+各顧客について、注文日が新しい順に注文を並べ、直前の注文日を取得してください。
+
+次の4項目を出力してください。
+  customer_id
+  order_id
+  order_date
+  previous_order_date（その注文より前の、同じ顧客の直近の注文日）
+
+条件
+  顧客ごとに注文日を昇順で評価すること。
+  同じ顧客で注文日が重複する場合は、order_id の昇順で順序を確定すること。
+  最初の注文の previous_order_date は NULL とすること。
+  最終的な表示順は customer_id の昇順、order_date の降順、order_id の降順とすること。
+*/
+SELECT
+  customer_id,
+  order_id,
+  order_date,
+  LAG(order_date) OVER (
+    PARTITION BY customer_id
+    ORDER BY order_date ASC, order_id ASC
+  ) AS previous_order_date
+FROM `resonant-tract-508812-p9.sql_training.training16_orders`
+ORDER BY customer_id ASC, order_date DESC, order_id DESC;
+
+
+
+
+
+

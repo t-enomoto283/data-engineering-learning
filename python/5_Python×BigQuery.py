@@ -305,7 +305,7 @@ from google.cloud import bigquery
 import logging
 # BigQueryの to_dataframe() は、内部で pandas に加えて db-dtypes などのパッケージを必要とします。
 # まだ導入されていない場合、PyCharmのターミナルで次を実行してください。すでに導入済みであれば、再インストールは不要です。
-python -m pip install pandas db-dtypes
+# python -m pip install pandas db-dtypes
 # また、google-cloud-bigquery-storage は今回の必須要件ではありません。BigQuery Storage APIを使用しない取得方法もあります。
 # 以前、WindowsのSmart App Controlによって grpcio がブロックされていたため、今回は BigQuery Storage APIを使わない方法を指定します。
 df = query_job.result().to_dataframe(
@@ -364,8 +364,40 @@ records = df.to_dict(orient="records")
 # BigQueryにSQLを送信し、結果をpandasのDataFrameとして取得したうえで、行数・列数・列名・データ内容を辞書にまとめて返す関数を作成。
 # 作成する関数
 def fetch_bigquery_dataframe(project_id, sql):
-    # ここに処理を実装
-    pass
+    try:
+        client = bigquery.Client(
+            project=project_id
+        )
+        query_job = client.query(sql)
+        df = query_job.result().to_dataframe(
+            create_bqstorage_client=False
+        )
+        row_count = df.shape[0]
+        column_count = df.shape[1]
+        columns = df.columns.tolist()
+        records = df.to_dict(orient="records")  # SQLが大量行を返す場合 to_dict() も大量のデータをPythonのメモリに消費
+    except Exception as e:
+        logging.exception("処理失敗")
+        return {
+            "status": "ERROR",
+            "project_id": project_id,
+            "row_count": 0,
+            "column_count": 0,
+            "columns": [],
+            "rows": [],
+            "error": str(e)
+        }
+    else:
+        logging.info("処理成功")
+        return {
+            "status": "OK",
+            "project_id": project_id,
+            "row_count": row_count,
+            "column_count": column_count,
+            "columns": columns,
+            "rows": records,
+            "error": None
+        }
 
 # 演習要件
 #   pandas、bigquery、logging をインポートする。
@@ -429,10 +461,92 @@ print(result2)
 # error にBigQueryからのエラーメッセージが入った辞書です。
 
 
-### STEP 5-4｜
+### STEP 5-4｜BigQueryから取得したデータの加工
+# STEP 5-3では、PythonからBigQueryのSQLを実行し、取得結果をpandasのDataFrameに変換する関数を実装しました。
+# 今回は、その処理を発展させ、BigQueryから取得したデータをPython・pandasで加工し、集計結果を返すパイプラインを作成します。
+#
+# 今回使うPython・pandasの知識
+#   知識・構文	                用途
+#   bigquery.Client()	        BigQueryへの接続
+#   to_dataframe()	            SQL実行結果をDataFrameに変換
+#   groupby()	                商品IDごとのグループ化
+#   agg() / sum()	            売上金額の集計
+#   reset_index()	            集計結果のインデックスを整理
+#   sort_values()	            売上金額の降順に並べ替え
+#   to_dict(orient="records")	集計結果を辞書のリストに変換
+#   try / except / else	        正常系・異常系の処理
+#   logging	                    処理結果や例外の記録
 
+# 目的
+# BigQueryから取得した明細データを、pandasで商品別に集計し、後続処理で利用できる形式に整理する。
+# 今回はSQL側で集計せず、Python・pandas側で集計することを学習目的とします。
 
+# 使用するデータ
+# PythonからBigQueryのSQL実行では、次のSQLを使用してください。
+"""
+SELECT 'A' AS product_id, 100 AS sales
+UNION ALL
+SELECT 'A' AS product_id, 200 AS sales
+UNION ALL
+SELECT 'B' AS product_id, 300 AS sales
+UNION ALL
+SELECT 'B' AS product_id, 150 AS sales
+UNION ALL
+SELECT 'C' AS product_id, 400 AS sales
+"""
+# 取得される明細データは以下の5行です。
+# product_id	sales
+# A	100
+# A	200
+# B	300
+# B	150
+# C	400
 
+# 実装要件
+# 関数名：
+#   aggregate_bigquery_sales
+# 引数：
+#   project_id：BigQueryのプロジェクトID
+#   sql：実行するSQL
+# 処理内容：
+#   bigquery.Client() を使用してBigQueryに接続する。
+#   引数 sql を実行し、結果をDataFrameとして取得する。
+#   product_id ごとに sales を合計する。
+#   集計後の売上列を total_sales とする。
+#   total_sales の降順で並べ替える。
+#   集計結果を辞書のリストに変換する。
+#   正常終了時と異常終了時で、それぞれ結果を辞書として返す。
+#   logging を使用して処理成功・失敗を記録する。
+# 戻り値の形式：
+# {
+#     "status": "OK" または "ERROR",
+#     "project_id": プロジェクトID,
+#     "row_count": 集計後の行数,
+#     "columns": 集計後の列名リスト,
+#     "rows": 集計結果の辞書リスト,
+#     "error": None または エラーメッセージ
+# }
+# 異常終了時は、row_count を 0、columns と rows を空リストにしてください。
+
+# テストケース
+# テストケース①：正常系
+# 先般のSQLを実行し、商品別の売上集計が正しく行われることを確認してください。
+# 期待される集計結果：
+#   product_id	total_sales
+#   B	450
+#   C	400
+#   A	300
+# status は "OK"、row_count は 3、error は None となること。
+
+# テストケース②：異常系
+# 以下の不正なSQLを渡してください。
+"SELEC 'A' AS product_id, 100 AS sales"
+# 期待される結果：
+#   status が "ERROR" となる。
+#   row_count が 0 となる。
+#   columns と rows が空リストとなる。
+#   error にBigQueryのエラー内容が格納される。
+#   logging.exception() で例外が記録される。
 
 
 
