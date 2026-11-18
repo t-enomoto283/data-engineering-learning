@@ -702,9 +702,149 @@ WHERE order_date > @watermark
 # まずは状態管理テーブルの作成とウォーターマークの読み込み・処理部分を実装してください。MERGEによるウォーターマークの更新処理はその後に扱います。
 
 def process_sales_with_persistent_watermark(project_id, sql, watermark_table, pipeline_name):
-    pass
+    try:
+        client = bigquery.Client(
+            project=project_id
+        )
+        try:
+            client.get_table(watermark_table)
+        except NotFound:
+            schema = [
+                bigquery.SchemaField("pipeline_name", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("last_processed_date", "DATE", mode="REQUIRED"),
+            ]
+            table = bigquery.Table(
+                watermark_table,
+                schema=schema
+            )
+            client.create_table(table)
 
+            initial_df = pd.DataFrame(
+                [
+                    {"pipeline_name": pipeline_name,
+                     "last_processed_date": pd.to_datetime("2026-11-03").date()}
+                ]
+            )
+            load_job_config = bigquery.LoadJobConfig(
+                schema=[
+                    bigquery.SchemaField("pipeline_name", "STRING", mode="REQUIRED"),
+                    bigquery.SchemaField("last_processed_date", "DATE", mode="REQUIRED")
+                ],
+                write_disposition=bigquery.WriteDisposition.WRITE_APPEND
+            )
+            load_job = client.load_table_from_dataframe(
+                initial_df,
+                watermark_table,
+                job_config=load_job_config
+                )
+            load_job.result()
 
+        watermark_query_job = client.query(
+            f"""
+            SELECT
+                pipeline_name,
+                last_processed_date
+            FROM `{watermark_table}`
+                WHERE pipeline_name = '{pipeline_name}'
+            """
+        )
+        watermark_df = watermark_query_job.result().to_dataframe(
+            create_bqstorage_client=False
+        )
+        watermark_df["last_processed_date"] = pd.to_datetime(watermark_df["last_processed_date"])
+        latest_date = watermark_df["last_processed_date"].max()
+
+        increment_query_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter(
+                    "watermark",
+                    "DATE",
+                    latest_date.date()
+                )
+            ]
+        )
+        increment_query_job = client.query(
+            sql,
+            job_config=increment_query_config
+        )
+        increment_df = increment_query_job.result().to_dataframe(
+            create_bqstorage_client=False
+        )
+
+        if increment_df.empty:
+            logging.info("増分なし")
+            return {
+                "status": "OK",
+                "project_id": project_id,
+                "pipeline_name": pipeline_name,
+                "row_count": 0,
+                "previous_watermark": latest_date.strftime("%Y-%m-%d"),
+                "processed_until": latest_date.strftime("%Y-%m-%d"),
+                "columns": ["product_id", "total_sales"],
+                "rows": [],
+                "error": None
+            }
+        else:
+            increment_df["order_date"] = pd.to_datetime(increment_df["order_date"])
+            processed_until = increment_df["order_date"].max()
+
+            summary = increment_df.groupby(
+                "product_id",
+                as_index=False
+            ).agg(
+                total_sales=("sales", "sum")
+            )
+            summary = summary.sort_values(
+                "total_sales",
+                ascending=False
+            )
+            summary = summary.reset_index(drop=True)
+
+            increment_watermark_df = pd.DataFrame(
+                [
+                    {"pipeline_name": pipeline_name,
+                     "last_processed_date": pd.to_datetime(processed_until).date()}
+                ]
+            )
+            load_append_job_config = bigquery.LoadJobConfig(
+                schema=[
+                    bigquery.SchemaField("pipeline_name", "STRING", mode="REQUIRED"),
+                    bigquery.SchemaField("last_processed_date", "DATE", mode="REQUIRED")
+                ],
+                write_disposition=bigquery.WriteDisposition.WRITE_APPEND
+            )
+            load_append_job = client.load_table_from_dataframe(
+                increment_watermark_df,
+                watermark_table,
+                job_config=load_append_job_config
+            )
+            load_append_job.result()
+
+            logging.info("処理成功")
+            return {
+                "status": "OK",
+                "project_id": project_id,
+                "pipeline_name": pipeline_name,
+                "row_count": increment_df.shape[0],
+                "previous_watermark": latest_date.strftime("%Y-%m-%d"),
+                "processed_until": processed_until.strftime("%Y-%m-%d"),
+                "columns": summary.columns.to_list(),
+                "rows": summary.to_dict(orient="records"),
+                "error": None
+            }
+    except Exception as e:
+        logging.exception("処理失敗")
+        return {
+            "status": "ERROR",
+            "project_id": project_id,
+            "pipeline_name": pipeline_name,
+            "row_count": 0,
+            "previous_watermark": None,
+            "processed_until": None,
+            "columns": [],
+            "rows": [],
+            "error": str(e)
+        }
 
 # テストケース
 # テストケース①：初回実行
@@ -726,6 +866,13 @@ def process_sales_with_persistent_watermark(project_id, sql, watermark_table, pi
 #     "error": None
 # }
 
+case1 = process_sales_with_persistent_watermark(
+    "resonant-tract-508812-p9",
+    sql1,
+    "resonant-tract-508812-p9.sql_training.pipeline_watermarks",
+    "sales_pipeline")
+print(case1)
+
 # テストケース②：保存済みウォーターマークが存在する場合
 # 状態管理テーブルに以下が保存されている状態で実行します。
 #   pipeline_name	last_processed_date
@@ -742,6 +889,85 @@ def process_sales_with_persistent_watermark(project_id, sql, watermark_table, pi
 #     "rows": [],
 #     "error": None
 # }
+
+case2 = process_sales_with_persistent_watermark(
+    "resonant-tract-508812-p9",
+    sql1,
+    "resonant-tract-508812-p9.sql_training.pipeline_watermarks",
+    "sales_pipeline"
+)
+print(case2)
+
+# 対象テーブルだけを削除するコード
+from google.cloud import bigquery
+client = bigquery.Client(
+    project="resonant-tract-508812-p9"
+)
+table_id = "resonant-tract-508812-p9.sql_training.pipeline_watermarks"
+client.delete_table(
+    table_id,
+    not_found_ok=True
+)
+print("状態管理テーブルの削除完了")
+
+
+### STEP 6-4｜ETLパイプラインの異常系テストとエラーハンドリング
+# 今回は、これまで作成してきたBigQuery連携パイプラインについて、
+# SQL実行時のエラーやデータ取得時の失敗を意図的に発生させ、Python側で適切に処理できるかを検証します。
+# 新しいライブラリとして、Python標準ライブラリの unittest.mock を使用します（追加インストールは不要）。
+#
+# 今回使うPython・pandasの知識
+# ① try / except と logging.exception() の応用
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
