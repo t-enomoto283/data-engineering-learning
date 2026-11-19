@@ -361,5 +361,156 @@ SELECT
 FROM `resonant-tract-508812-p9.sql_training.step5_5_sales_summary`
 ORDER BY total_sales DESC;
 
+/*
+日替わりSQL：SUM() OVER() による累計集計
+今回は、前回のウィンドウ関数を発展させて、顧客ごとの累計購入金額を求めます。
+
+以下の注文データがあります。
+  customer_id	 order_date	 order_id  amount
+  A	           2026-11-01	 101	     1000
+  A	           2026-11-03	 102	     2000
+  A	           2026-11-05	 103	     1500
+  B	           2026-11-02	 104	     3000
+  B	           2026-11-04	 105	     1000
+このデータから、顧客ごとに注文日順の累計購入金額を求めてください。
+
+要件
+  customer_id ごとに累計を計算する。
+  order_date の昇順で累計する。
+  出力列は customer_id、order_date、order_id、amount、cumulative_amount の5列とする。
+  最終結果は customer_id、order_date、order_id の昇順に並べる。
+  SUM() OVER() を使用する。同じ日に複数注文がある場合も注文単位で累計するため、order_id も順序に含める。
+
+実行用データ
+今回は既存のテーブル構造を前提にせず、次のCTEを基に後続のSQLを書いてBigQueryで実行。
+*/
+WITH orders AS (
+  SELECT
+    'A' AS customer_id, DATE '2026-11-01' AS order_date, 101 AS order_id, 1000 AS amount
+  UNION ALL
+  SELECT
+    'A', DATE '2026-11-03', 102, 2000
+  UNION ALL
+  SELECT
+    'A', DATE '2026-11-05', 103, 1500
+  UNION ALL
+  SELECT
+    'B', DATE '2026-11-02', 104, 3000
+  UNION ALL
+  SELECT
+    'B', DATE '2026-11-04', 105, 1000
+)
+SELECT
+  customer_id,
+  order_date,
+  order_id,
+  amount,
+  SUM(amount) OVER (
+    PARTITION BY customer_id
+    ORDER BY order_date ASC, order_id ASC
+    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  ) AS cumulative_amount
+FROM orders
+ORDER BY customer_id ASC, order_date ASC, order_id ASC;
+
+
+/*
+日替わりSQL｜LEFT JOINにおけるONとWHEREの使い分け
+
+今回のテーマと目的：
+ECサイトの顧客情報と注文情報を使います。
+実務では、例えば「2026年11月に注文した顧客の購入金額を集計したい。ただし、注文していない顧客も一覧に残したい」という要件があります。
+この場合、単純に LEFT JOIN すればよいわけではありません。結合条件と抽出条件をどこに記述するかによって、結果が変わる可能性があります。
+今回は、その違いを理解したうえでSQLを設計してください。
+
+使用するデータ
+  customers：顧客マスタ
+  customer_id	 customer_name	status
+  1	           田中	           active
+  2	           佐藤	           active
+  3	           鈴木	           inactive
+  4	           高橋	           active
+  5	           伊藤	           active
+
+  orders：注文履歴
+  order_id  customer_id	 order_date	 amount
+  101	      1	           2026-10-25	 5000
+  102	      1	           2026-11-03	 3000
+  103	      1	           2026-11-10	 2000
+  104	      2	           2026-11-05	 4000
+  105	      3	           2026-11-08	 6000
+  106	      4	           2026-10-20	 7000
+  107	      4	           2026-12-01	 8000
+
+要件：2026年11月における、アクティブ顧客別の注文金額を集計する。
+  status = 'active' の顧客のみ対象とする。
+  集計対象の注文期間は2026年11月1日〜11月30日とする。
+  11月に注文がないアクティブ顧客も結果に残す。
+  注文がない顧客の total_amount は 0 とする。
+  注文がない顧客の order_count も 0 とする。
+  customer_id の昇順で並べる。
+
+出力列は次の4列です。
+  customer_id、customer_name、order_count、total_amount
+
+実行用データ
+次のCTEを基に後続のSQLを書いてBigQueryで実行
+*/
+WITH customers AS (
+  SELECT
+    1 AS customer_id, '田中' AS customer_name, 'active' AS status
+  UNION ALL
+  SELECT
+    2, '佐藤', 'active'
+  UNION ALL
+  SELECT
+    3, '鈴木', 'inactive'
+  UNION ALL
+  SELECT
+    4, '高橋', 'active'
+  UNION ALL
+  SELECT
+    5, '伊藤', 'active'
+),
+orders AS (
+  SELECT
+    101 AS order_id, 1 AS customer_id, DATE '2026-10-25' AS order_date, 5000 AS amount
+  UNION ALL
+  SELECT
+    102, 1, DATE '2026-11-03', 3000
+  UNION ALL
+  SELECT
+    103, 1, DATE '2026-11-10', 2000
+  UNION ALL
+  SELECT
+    104, 2, DATE '2026-11-05', 4000
+  UNION ALL
+  SELECT
+    105, 3, DATE '2026-11-08', 6000
+  UNION ALL
+  SELECT
+    106, 4, DATE '2026-10-20', 7000
+  UNION ALL
+  SELECT
+    107, 4, DATE '2026-12-01', 8000
+),
+active_customer AS (
+  SELECT
+    customer_id,
+    customer_name
+  FROM customers
+  WHERE status = 'active'
+)
+SELECT
+  a.customer_id,
+  a.customer_name,
+  COUNT(o.order_id) AS order_count,
+  SUM(IFNULL(o.amount, 0)) AS total_amount
+FROM active_customer AS a
+LEFT OUTER JOIN orders AS o
+  ON a.customer_id = o.customer_id
+    AND (o.order_date BETWEEN DATE '2026-11-01' AND DATE '2026-11-30')
+GROUP BY a.customer_id, a.customer_name
+ORDER BY a.customer_id ASC;
 
 

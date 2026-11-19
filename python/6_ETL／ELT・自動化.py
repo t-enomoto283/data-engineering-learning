@@ -918,30 +918,218 @@ print("状態管理テーブルの削除完了")
 #
 # 今回使うPython・pandasの知識
 # ① try / except と logging.exception() の応用
+# STEP 6-3では、次のような例外処理を実装しました。
+try:
+    # BigQuery接続・SQL実行・データ加工
+    pass
+except Exception as e:
+    logging.exception("処理失敗")
+# 今回は、実際に例外が発生したときに、この処理が期待どおり動作するかを確認します。
+# logging.exception() は、例外メッセージだけでなく、どこでエラーが発生したかを示すトレースバックも記録します。
+# 例えば、SQL実行中に例外が発生した場合、エラーを記録したうえで、呼び出し元に status="ERROR" を返せるかを検証します。
+#
+# ② raise
+# raise は、Pythonで意図的に例外を発生させる構文です。
+# 例えば、
+def check_value(value):
+    if value < 0:
+        raise ValueError("負の値は指定できません")
+    return value
+# この関数に -1 を渡すと、ValueError が発生します。
+# 一方、10 を渡せば正常に値が返ります。
+# 今回の演習では、異常系テストのために意図的にエラーを発生させる用途で使用します。
+#
+# ③ RuntimeError
+# RuntimeError は、プログラムの実行中に発生した問題を表す例外クラスです。
+# これを try / except で捕捉すると、
+try:
+    raise RuntimeError("データ取得に失敗しました")
+except Exception as e:
+    print(str(e))  # データ取得に失敗しました
+# 今回のテストでは、BigQueryからのデータ取得が失敗した状況を再現するために使用します。
+#
+# ④ unittest.mock.patch()
+# ここが今回の重要な新規知識です。
+# 実際のBigQueryで障害を発生させなくても、Python側で特定の処理だけをテスト用の動作に差し替えられます。
+# これを「モック」と呼びます。
+# 例えば、次の関数があるとします。
+def get_data():
+    return "取得成功"
+# 通常は、
+print(get_data())
+# とすると、取得成功 が表示されます。
+# しかし、patch() を使用すると、テスト中だけ別の動作にできます。
+from unittest.mock import patch
+with patch("__main__.get_data", return_value="テスト用データ"):
+    print(get_data())
+# 出力：テスト用データ
+# with ブロックを抜けると、元の関数の動作に戻ります。
+# ここでの "__main__.get_data" は、get_data が現在の実行スクリプトに定義されている場合の指定です。
+# 別のPythonファイルから読み込んでいる場合は、参照先に応じて指定が変わります。
+#
+# ⑤ Mock()
+# Mock() は、テスト用のオブジェクトを作成するための機能です。
+from unittest.mock import Mock
+mock_client = Mock()
+# 例えば、メソッドの戻り値を設定できます。
+mock_client.get_data.return_value = "テストデータ"
+print(mock_client.get_data())
+# 出力：テストデータ
+# これにより、実際の外部サービスに接続せず、戻り値や例外を自由に設定できます。
+#
+# ⑥ side_effect
+# side_effect を使用すると、モックのメソッドが呼び出された際に例外を発生させられます。
+mock_client = Mock()
+mock_client.get_data.side_effect = RuntimeError(
+    "データ取得に失敗しました"
+)
+# この状態で、mock_client.get_data() を呼び出すと、指定した RuntimeError が発生します。
+# 通常の return_value との違いは次のとおりです。
+#   設定	                             動作
+#   return_value	                 指定した値を返す
+#   side_effect = RuntimeError(...)	 指定した例外を発生させる
+# 今回のテストでは、これを利用してBigQueryのデータ取得失敗を再現します。
+#
+# ⑦ assert の応用
+# assert は、条件が正しいことを検証する構文です。
+result = {"status": "ERROR", "error": "SQL実行失敗"}
+assert result["status"] == "ERROR"
+assert result["error"] == "SQL実行失敗"
+# 条件がすべて成立すれば、そのまま処理が進みます。
+# 条件が成立しなければ、AssertionError が発生します。
+# 今回は、単にエラーが発生したかを見るだけでなく、関数が期待した形式でエラー情報を返しているかを検証します。
+
+# 演習の目的
+# STEP 6-3で作成した関数を対象に、以下の2つの異常系を検証します。
+#   テストケース①：SQL実行エラー
+#   テストケース②：BigQueryからのデータ取得失敗
+# 今回は異常系テストが目的なので、ウォーターマークの保存・更新や商品別売上の集計処理を新たに実装する必要はありません。
+# また、BigQuery Sandboxで利用できないDMLやストリーミング挿入は使用しません。
+
+# 実装する関数
+# 今回は、STEP 6-3で作成した以下の関数をそのまま利用します。
+#   process_sales_with_persistent_watermark(project_id, sql, watermark_table, pipeline_name)
+# 関数の正常系の処理は変更しません。
+# テスト用コードを別途作成し、異常時の動作を確認してください。
+
+# テストケース
+# テストケース①：SQL実行エラー
+# 目的：
+#   SQLの構文エラーが発生した場合、関数が例外を捕捉して ERROR を返せるか確認する。
+# 今回は、実際のBigQueryに対して意図的に不正なSQLを実行します。
+# テスト用SQL：
+invalid_sql = """
+SELECT
+    FROM
+"""
+
+# 期待する戻り値：
+# {
+#     "status": "ERROR",
+#     "project_id": "resonant-tract-508812-p9",
+#     "pipeline_name": "sales_pipeline",
+#     "row_count": 0,
+#     "previous_watermark": None,
+#     "processed_until": None,
+#     "columns": [],
+#     "rows": [],
+#     "error": "BigQueryから返されたエラーメッセージ"
+# }
+# error の具体的な文字列はBigQuery側の応答によって変わるため、完全一致は要求しません。
+# ただし、error が None ではなく、SQL実行失敗を示す文字列になっていることを確認してください。
+# また、logging.exception() によってトレースバックが出力されることも確認します。
+
+case1 = process_sales_with_persistent_watermark(
+    "resonant-tract-508812-p9",
+    invalid_sql,
+    "resonant-tract-508812-p9.sql_training.pipeline_watermarks",
+    "sales_pipeline"
+)
+print(case1)
+
+# テストケース②：データ取得失敗
+# 目的：
+#   SQL実行後のDataFrame取得が失敗した場合、例外を捕捉できるか確認する。
+# 今回は、実際のBigQueryで障害を起こすのではなく、unittest.mock を使用します。
+# STEP 6-3の関数では、データ取得時に次の処理を行っています。
+increment_df = increment_query_job.result().to_dataframe(
+    create_bqstorage_client=False
+)
+# この to_dataframe() が失敗する状況を再現します。
+# そのために、patch()、Mock()、side_effect を使用してください。
+# 今回はテスト用モックを構築する部分が新規学習内容なので、必要な構成を示します。
+from unittest.mock import patch, Mock
+mock_job = Mock()
+mock_job.result.return_value.to_dataframe.side_effect = RuntimeError(
+    "データ取得に失敗しました"
+)
+# このコードでは、mock_job.result().to_dataframe() が呼び出されると RuntimeError が発生します。
+# ただし、STEP 6-3の関数は、ウォーターマーク取得時にも to_dataframe() を使用しています。
+# そのため、ウォーターマーク取得は正常に動作させ、増分データ取得の部分だけを失敗させる必要があります。
+# 具体的には、client.query() の呼び出しが2回あることを考慮し、
+# 1回目には正常なウォーターマーク取得結果、2回目にはエラーを発生させるモックを返すように設定してください。
+# 今回のテストで使用する正常なウォーターマークDataFrameは、次のものです。
+watermark_test_df = pd.DataFrame(
+    [
+        {"pipeline_name": "sales_pipeline",
+        "last_processed_date": pd.to_datetime("2026-11-05")}
+        ]
+)
+# テスト対象関数内の bigquery.Client() を patch() で差し替えることで、実際のBigQueryへの接続なしに検証できます。
+# 期待する戻り値：
+# {
+#     "status": "ERROR",
+#     "project_id": "resonant-tract-508812-p9",
+#     "pipeline_name": "sales_pipeline",
+#     "row_count": 0,
+#     "previous_watermark": None,
+#     "processed_until": None,
+#     "columns": [],
+#     "rows": [],
+#     "error": "データ取得に失敗しました"
+# }
+# こちらは、RuntimeError のメッセージを自分で設定しているため、error の文字列も完全一致で確認できます。
+# テストケース②は、Mock() と patch() を使用して、SQL実行後の to_dataframe() だけを意図的に失敗させるテストです。
+# テストケース①と異なり、実際のBigQueryには接続しません。
+
+from unittest.mock import Mock, patch
+# ① テスト用のウォーターマークDataFrame
+watermark_test_df = pd.DataFrame(
+    [
+        {"pipeline_name": "sales_pipeline",
+        "last_processed_date": pd.to_datetime("2026-11-05")}
+    ]
+)
+# ② 1回目のクエリ：ウォーターマーク取得成功
+mock_watermark_job = Mock()
+mock_watermark_job.result.return_value.to_dataframe.return_value = watermark_test_df
+# ③ 2回目のクエリ：データ取得失敗
+mock_increment_job = Mock()
+mock_increment_job.result.return_value.to_dataframe.side_effect = RuntimeError(
+    "データ取得に失敗しました"
+)
+# ④ BigQueryクライアントをテスト用に差し替える
+with patch.object(bigquery, "Client") as mock_client_class:
+    # 偽物のクライアントを取得
+    mock_client = mock_client_class.return_value
+    # 状態管理テーブルは存在することにする
+    mock_client.get_table.return_value = Mock()
+    # query()の1回目・2回目の戻り値を設定
+    mock_client.query.side_effect = [
+        mock_watermark_job,
+        mock_increment_job
+    ]
+    # ⑤ STEP 6-3の関数を実行
+    case2 = process_sales_with_persistent_watermark(
+        "resonant-tract-508812-p9",
+        sql1,
+        "resonant-tract-508812-p9.sql_training.pipeline_watermarks",
+        "sales_pipeline"
+    )
+print(case2)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+### STEP 6-4.5｜モック基礎
 
 
 
