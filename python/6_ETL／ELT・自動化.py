@@ -8,6 +8,8 @@
 # 今回のSTEP 6-1では、前回処理した日付とBigQueryから取得した売上データの日付を比較し、増分データを抽出するために使用します。
 # 例えば、次のような文字列があるとします。
 import pandas as pd
+from pandas.io.formats.format import return_docstring
+
 date = "2026-11-03"
 converted_date = pd.to_datetime(date)
 print(converted_date)        # 2026-11-03 00:00:00
@@ -1130,6 +1132,1018 @@ print(case2)
 
 
 ### STEP 6-4.5｜モック基礎
+## モックとは何か・なぜ必要なのか
+#
+# 例えば、次のような処理があるとします。
+# あるECサイトで、商品の単価と数量から購入金額を計算するプログラムです。
+def get_price():
+    return 1000
+def calculate_total(quantity):
+    price = get_price()
+    return price * quantity
+result = calculate_total(3)
+print(result)  # 3000
+# このコードには、2つの関数があります。
+#   get_price() 商品の単価を取得する関数です。今回は単純に 1000 を返します。
+#   calculate_total(quantity)  商品の単価を取得し、数量を掛けて合計金額を返す関数です。
+# ここまでは通常のPythonの処理です。では、なぜモックが必要なのでしょうか？
+# 実務では、get_price() が必ずしも単純な関数とは限りません。
+#
+# 例えば、BigQueryから商品の価格を取得する関数だったとします。
+def get_price():
+    # BigQueryに接続して商品の単価を取得する処理
+    pass
+# この場合、calculate_total() をテストするたびに、BigQueryへ接続することになります。
+# しかし、確認したいのは「取得した単価に数量を掛ける計算が正しいか」という部分だけかもしれません。
+# それなのに、BigQueryへの接続が失敗すると合計金額の計算が正しいかどうかを確認できなくなります。
+# そこで、次のように考えます。
+#
+# 「BigQueryから単価を取得する部分は、テスト中だけ偽物に置き換えて、必ず1000を返すようにできないだろうか？」
+# このような場面で使用するのが、モック（Mock）です。
+# 先ほどの処理を、通常時とテスト時で比較します。
+#   通常の処理 calculate_total()            モックを使うテスト calculate_total()
+#     ↓                                     ↓
+#   本物の get_price() BigQueryへ接続        偽物の get_price() BigQueryには接続しない
+#     ↓                                     ↓
+#   取得した単価を返す                        1000 を返す
+#
+# 重要なのは、calculate_total() 自体の計算処理は変更しないという点です。
+# 変更するのは、calculate_total() が呼び出す get_price() の動作だけです。
+# テスト中は、あらかじめ決めた値を返すようにすることで、外部サービスの状態に左右されず計算処理を確認できます。
+# なお、Pythonでは unittest.mock を使ってこのような差し替えを実現でき、具体的な構文は後の段階で学びます。
+#
+# 「テスト対象」と「依存先」の違い
+# モックを理解するうえで、この2つの言葉は重要です。
+#   用語	        今回の例	            意味
+#   テスト対象	calculate_total()	正しく動くか確認したい処理
+#   依存先	    get_price()	        テスト対象が利用する別の処理
+# 目的は、calculate_total() の計算が正しいか確認することです。
+# そのため、get_price() をモックに置き換えることを考えます。
+# 一方、get_price() が本当にBigQueryから正しい価格を取得できるかはこのテストでは確認できないので、そこは別のテストで確認する必要があります。
+# モックを使うことで、すべての処理が正しいと証明できるわけではない、という点も覚えておいてください。
+#
+# 演習：モックを使わず、仕組みを理解する
+# まだ Mock() や patch() は使用しません。
+# 次のコードを確認してください。
+def get_price():
+    return 500
+def calculate_total(quantity):
+    price = get_price()
+    return price * quantity
+print(calculate_total(4))
+# 問題① このコードを実行すると、何が出力されますか？
+#   2000
+# 問題② calculate_total() のコードを変更せず、get_price() の戻り値だけを 800 に変更した場合、calculate_total(4) の結果は？
+#   3200
+# 問題③ 仮に get_price() がBigQueryへ接続する関数だった場合、
+# calculate_total() の計算処理だけをテストするために、なぜ get_price() を偽物に置き換えることが有効なのでしょうか？
+#   BigQueryへの接続が失敗すると合計金額の計算が正しいかどうかを確認できなくなるため。
+
+## Mock() の基本操作
+#
+# Pythonには、テスト用の偽物のオブジェクトを作る Mock というクラスが用意されています。
+from unittest.mock import Mock
+fake_function = Mock()
+# このコードを分解します。
+#   ① from unittest.mock import Mock
+#     Python標準ライブラリの unittest.mock から、Mock クラスを読み込んでいます。
+#     追加インストールは不要です。
+#   ② fake_function = Mock()
+#     Mock クラスから、テスト用のオブジェクトを作成しています。
+#     fake_function という変数に格納されたものは、通常のPython関数ではなく、関数のように呼び出せるモックオブジェクトです。
+# 例えば、次のように呼び出せます。
+fake_function()
+# ただし、この段階では特定の処理や戻り値を設定していません。
+#
+# モックが呼び出されたか確認する
+# 次のコードを見てください。
+from unittest.mock import Mock
+fake_function = Mock()
+print(fake_function.called)  # False
+fake_function()
+print(fake_function.called)  # True
+# called は、モックが一度でも呼び出されたかを表す属性です。
+#   False：まだ一度も呼び出されていない
+#   True：一度以上呼び出されている
+# 注意したいのは、次の違いです。
+fake_function.called
+# これは属性の値を参照しています。
+# 一方、
+fake_function()
+# こちらはモック自体を呼び出しています。
+# called に () は付けません。
+#
+# モックの呼び出し回数を確認する
+# 次に、call_count を使います。
+from unittest.mock import Mock
+fake_function = Mock()
+print(fake_function.call_count)  # 0
+fake_function()
+fake_function()
+print(fake_function.call_count)  # 2
+# call_count は、そのモックが呼び出された回数を保持しています。
+#   状態	        called	call_count
+#   呼び出し前	False	0
+#   1回呼び出し	True	1
+#   2回呼び出し	True	2
+# ここで重要なのは、モックは呼び出しの記録を自動的に保持してくれるということです。
+# 例えば、実際のプログラムで「データ保存処理が1回だけ呼ばれたか」を確認したい場合にも、この仕組みを利用できます。
+# ただし、今回の段階ではまだ本物の関数を差し替えていません。単独のモックを作成し、その動作を確認しているだけです。
+#
+# 演習：Mockの基本操作
+# 今回は、自分で短いコードを書いてください。
+# 要件
+#   unittest.mock から Mock をインポートする。
+#   mock_task という変数にモックを作成する。
+#   呼び出し前の called と call_count を表示する。
+#   mock_task を3回呼び出す。
+#   呼び出し後の called と call_count を表示する。
+from unittest.mock import Mock
+mock_task = Mock()
+print(mock_task.called)
+print(mock_task.call_count)
+mock_task()
+mock_task()
+mock_task()
+print(mock_task.called)
+print(mock_task.call_count)
+
+## return_value による戻り値の設定
+#
+# ここからは、モックの「戻り値」を設定する方法を学びます。
+# 今回は return_value だけを新しく扱います。
+#
+# return_value とは何か？
+# 通常のPython関数では、return を使って戻り値を指定します。
+def get_price():
+    return 1000
+print(get_price())  # 1000
+# 一方、モックでは return_value を使って戻り値を設定できます。
+from unittest.mock import Mock
+mock_price = Mock()
+mock_price.return_value = 1000
+print(mock_price())  # 1000
+# この2つは、呼び出したときに 1000 が返るという点では同じですが、仕組みは異なります。
+#   通常の関数	            モック
+#   return 1000	            return_value = 1000
+#   関数内部に戻り値を記述	    モックの属性に戻り値を設定
+#   get_price() で呼び出す	mock_price() で呼び出す
+#
+# コードを分解してみます
+mock_price = Mock()             # これは、モックオブジェクトを作成しています。
+mock_price.return_value = 1000  # これは、mock_price() が呼び出されたときに返す値を 1000 に設定しています。
+print(mock_price())             # ここで初めてモックを呼び出し、設定した値を取得しています。
+# 重要なのは、次の違いです。
+mock_price.return_value
+# これは設定されている戻り値を参照します。モックを実際に呼び出し、戻り値を取得します。同時に call_count も増加します。
+#
+# 戻り値は変更できる
+# 例えば、次のコードを考えます。
+from unittest.mock import Mock
+mock_price = Mock()
+mock_price.return_value = 500
+print(mock_price())            # 500
+mock_price.return_value = 800
+print(mock_price())            # 800
+print(mock_price.call_count)   # 2
+# 最初は 500 を返し、途中で設定を変更すると 800 を返すようになります。
+# return_value を変更しても、モックの呼び出し履歴はリセットされません。
+#
+# 演習：戻り値を設定する
+# 今回も、短いコードを自分で作成してください。
+# 要件
+#   Mock をインポートする。
+#   mock_price というモックを作成する。
+#   return_value に 1200 を設定する。
+#   mock_price() を呼び出し、結果を price1 に代入する。
+#   return_value を 1800 に変更する。
+#   mock_price() を再度呼び出し、結果を price2 に代入する。
+#   price1、price2、mock_price.call_count を順番に表示する。
+from unittest.mock import Mock
+mock_price = Mock()
+mock_price.return_value = 1200
+price1 = mock_price()
+mock_price.return_value = 1800
+price2 = mock_price()
+print(price1)
+print(price2)
+print(mock_price.call_count)
+
+## side_effect による例外の再現
+#
+# ここからは、モックを使って意図的にエラーを発生させる方法を学びます。
+# 前回のSTEP 6-4では、次のコードが登場しました。
+mock_increment_job.result.return_value.to_dataframe.side_effect = RuntimeError(
+    "データ取得に失敗しました"
+)
+# 今回はこの長いコードを扱いません。まず、side_effect が何をするものなのか、単純なモックを使って理解します。
+#
+# return_value と side_effect の違い
+# まず、return_value を振り返ります。
+from unittest.mock import Mock
+mock_task = Mock()
+mock_task.return_value = "成功"
+print(mock_task())  # 成功
+# これは、モックが呼び出されたときに "成功" を返す処理です。
+# では、テストで「この処理が失敗した場合」を確認したいときは、どうすればよいでしょうか？
+# そこで使用できるのが side_effect です。
+from unittest.mock import Mock
+mock_task = Mock()
+mock_task.side_effect = RuntimeError("処理に失敗しました")
+mock_task()
+# 実行すると、RuntimeError: 処理に失敗しました の例外が発生します。
+# ここで重要なのは、mock_task() を呼び出したタイミングでエラーが発生するという点です。
+#   mock_task = Mock() モックを作成
+#     ↓
+#   mock_task.side_effect = RuntimeError(...) 呼び出し時に発生させる例外を設定
+#     ↓
+#   mock_task() ここで例外が発生する
+#
+# RuntimeError とは何か？
+# RuntimeError は、Pythonに標準で用意されている例外クラスの一つです。
+# 例えば、次のコードでも使用できます。
+try:
+    pass
+except Exception as e:
+    raise RuntimeError("処理に失敗しました")
+# raise は、例外を発生させるための構文です。
+# side_effect に例外オブジェクトを設定すると、モックを呼び出したときに、その例外が発生します。
+# つまり、今回の2つは、例外を発生させるという点では似た働きをします。
+# ただし、前者はその場所で直接例外を発生させます。後者はモックの呼び出し時に例外が発生します。
+#
+# try / except で例外を捕捉する
+# 次のコードを見てください。
+from unittest.mock import Mock
+mock_task = Mock()
+mock_task.side_effect = RuntimeError("データ取得に失敗しました")
+try:
+    mock_task()
+except RuntimeError as e:
+    print("エラーを捕捉しました")
+    print(str(e))
+# 実行結果：
+#   エラーを捕捉しました
+#   データ取得に失敗しました
+# 処理は次の順番で進みます。
+#   Mock() でモックを作成する。
+#   side_effect に = RuntimeError(...) を設定する。
+#   try の中で mock_task() を呼び出すと、設定した RuntimeError が発生する。
+#   except RuntimeError as e で例外を捕捉して、str(e) で例外メッセージを取得する。
+# これが、前回のSTEP 6-4で使用した異常系テストの基本的な仕組みです。
+# ただし、現段階では、実際のBigQuery処理をモックに差し替える方法までは学んでいません。それは後の patch() で扱います。
+#
+# 演習：side_effect による例外の再現
+# 今回は、side_effect を使用してエラーを発生させ、そのエラーを捕捉するコードを作成してください。
+# 要件
+#   Mock をインポートする。
+#   mock_fetch というモックを作成する。
+#   side_effect に RuntimeError("取得処理に失敗しました") を設定する。
+#   try ブロック内で mock_fetch() を呼び出す。
+# 5. except RuntimeError as e で例外を捕捉する。
+# 6. 捕捉した例外メッセージを print(str(e)) で表示する。
+# 7. 最後に mock_fetch.call_count を表示する。
+from unittest.mock import Mock
+mock_fetch = Mock()
+mock_fetch.side_effect = RuntimeError("取得処理に失敗しました")
+try:
+    mock_fetch()
+except RuntimeError as e:
+    print(str(e))
+print(mock_fetch.call_count)
+
+## side_effect で呼び出しごとの戻り値を変更する
+#
+# 先ほどは side_effect を使って例外を発生させました。
+# しかし、side_effect にはもう一つ重要な使い方があり、モックを呼び出すたびに、異なる戻り値を返せます。
+# これは、STEP 6-4で使用した次のコードを理解するために必要な知識です。
+mock_client.query.side_effect = [
+    mock_watermark_job,
+    mock_increment_job
+]
+# 今回は、まだこの複雑なコードを扱いません。まず単純な例から確認します。
+#
+# return_value との違い
+# まず、これまで学習した return_value です。
+from unittest.mock import Mock
+mock_task = Mock()
+mock_task.return_value = 100
+print(mock_task())  # 100
+print(mock_task())  # 100
+print(mock_task())  # 100
+# return_value に 100 を設定しているため、何度呼び出しても同じ値が返ります。
+# 一方、side_effect にリストを設定すると、次のようになります。
+from unittest.mock import Mock
+mock_task = Mock()
+mock_task.side_effect = [100, 200, 300]
+print(mock_task())  # 100
+print(mock_task())  # 200
+print(mock_task())  # 300
+# これは、モックが呼び出されるたびに、リストの値を先頭から順番に返しているためです。
+# リストの値を使い切った場合、StopIteration の例外が発生します。
+# StopIteration は、イテレーターから次の値を取得しようとしたときに、もう値が残っていないことを示す例外です。
+# 設定した値の数より多くモックを呼び出すと、StopIteration が発生すると理解できれば十分です。
+#
+# 例外と戻り値を組み合わせることもできる
+# 例えば、次のコードです。
+from unittest.mock import Mock
+mock_task = Mock()
+mock_task.side_effect = [
+    100,
+    RuntimeError("2回目の処理に失敗しました"),
+    300
+]
+try:
+    print(mock_task())
+    print(mock_task())
+except RuntimeError as e:
+    print(str(e))
+print(mock_task())
+# 実行結果：
+#   100
+#   2回目の処理に失敗しました
+#   300
+# ここでは、1回目は正常に値を返し、2回目だけ例外を発生させ、3回目は再び値を返しています。
+# なお、2回目に例外が発生すると、その時点で try ブロック内の残りの処理は実行されず、except に移ります。
+# この例では、3回目の mock_task() は try / except の外側にあるため実行されています。
+#
+# 演習：呼び出しごとに異なる値を返す
+# 今回は、side_effect にリストを設定する演習です。
+# 要件
+#   Mock をインポートする。
+#   mock_fetch というモックを作成する。
+#   side_effect に [500, 800, 1200] を設定する。
+#   mock_fetch() を3回呼び出し、それぞれの戻り値を result1、result2、result3 に代入する。
+#   それぞれの戻り値を順番に表示する。
+#   最後に mock_fetch.call_count を表示する。
+from unittest.mock import Mock
+mock_fetch = Mock()
+mock_fetch.side_effect = [
+    500,
+    800,
+    1200
+]
+result1 = mock_fetch()
+result2 = mock_fetch()
+result3 = mock_fetch()
+print(result1)
+print(result2)
+print(result3)
+print(mock_fetch.call_count)
+
+## patch() による処理の差し替え
+#
+# 今回は、これまで作成してきたモックを、実際の関数の代わりに使用する方法を学びます。
+# ここは前回のSTEP 6-4で特に説明が不足していた部分なので、まずは単純なPythonの関数だけを使用します。
+def get_price():
+    return 1000
+def calculate_total(quantity):
+    price = get_price()
+    return price * quantity
+print(calculate_total(3))  # 3000
+# calculate_total() は、内部で get_price() を呼び出しています。ここで、次のようなテストを考えます。
+# get_price() のコードを変更せずに、テスト中だけ戻り値を 500 にしたい。つまり、テスト時だけ以下の動作にしたいわけです。
+def get_price():
+    return 500
+# しかし、本物の関数を書き換える必要はありません。そこで使用するのが patch() です。
+#
+# patch() の基本構文
+# まず、完成したコードを示します。
+from unittest.mock import patch
+def get_price():
+    return 1000
+def calculate_total(quantity):
+    price = get_price()
+    return price * quantity
+print(calculate_total(3))
+
+with patch("__main__.get_price") as mock_price:
+    mock_price.return_value = 500
+    print(calculate_total(3))
+
+print(calculate_total(3))
+# 通常の .py ファイルを直接実行する場合、上記一連の結果は、次のとおりです。
+#   3000
+#   1500
+#   3000
+# __main__ は、今回のように直接実行しているPythonファイルを指します。別のモジュールから関数を読み込む場合などは指定する場所が変わります。
+#
+with patch("__main__.get_price")
+# この部分では、get_price という名前が参照する本物の関数を、with ブロックの間だけモックに差し替えています。
+# patch() は、指定された場所に存在する名前を一時的に差し替える仕組みです。今回差し替え対象は __main__ で実行された get_price です。
+                                 as mock_price:
+# patch() が作成したモックを、mock_price という変数で受け取っています。
+# つまり、mock_price はモックオブジェクトです。これまで学習した Mock() と同じように、return_value を設定できます。
+    mock_price.return_value = 500
+# ここで、差し替えたモックの戻り値を 500 に設定しています。
+# そのため、with ブロック内で calculate_total(3) を実行すると、500 × 3 = 1500 となります。
+#
+# with ブロックの外では元に戻る
+print(calculate_total(3))
+# with ブロックを抜けると、patch() による差し替えは解除されます。
+# そのため、再び本物の get_price() が呼び出され、1000 × 3 = 3000 になります。
+#
+# 演習：patch() を使った関数の差し替え
+# 今回は、patch() を使って本物の関数を一時的に差し替える演習です。
+# 使用するコード
+def get_tax_rate():
+    return 0.1
+def calculate_tax(price):
+    tax_rate = get_tax_rate()
+    return price * tax_rate
+# 要件
+#   unittest.mock から patch をインポートする。
+#   上記2つの関数を定義する。
+#   差し替え前に calculate_tax(1000) を実行して表示する。
+#   with patch("__main__.get_tax_rate") as mock_tax_rate: を使用して、get_tax_rate() をモックに差し替える。
+#   モックの return_value を 0.08 に設定する。
+#   with ブロック内で calculate_tax(1000) を実行して表示する。
+#   with ブロックを抜けた後、再び calculate_tax(1000) を実行して表示する。
+from unittest.mock import patch
+
+def get_tax_rate():
+    return 0.1
+def calculate_tax(price):
+    tax_rate = get_tax_rate()
+    return price * tax_rate
+print(calculate_tax(1000))
+
+with patch("__main__.get_tax_rate") as mock_tax_rate:
+    mock_tax_rate.return_value = 0.08
+    print(calculate_tax(1000))
+
+print(calculate_tax(1000))
+
+## メソッドの連鎖とモック
+#
+# ここからは、STEP 6-4で登場した次のコードを理解するための学習です。
+mock_increment_job.result.return_value.to_dataframe.side_effect = RuntimeError(
+    "データ取得に失敗しました"
+)
+# このコードが難しかった理由の一つは、メソッドの呼び出しが連続していることです。
+# 今回は、いきなりBigQueryを使わず、まず通常のPythonクラスで仕組みを確認します。
+#
+# まず通常のPythonコードで考える
+# 次の2つのクラスを見てください。
+class Result:
+    def get_value(self):
+        return 100
+
+class Job:
+    def result(self):
+        return Result()
+# このコードでは、Job クラスの result() メソッドが、Result クラスのオブジェクトを返します。
+# 実際に使うと、次のようになります。
+job = Job()
+result_obj = job.result()
+value = result_obj.get_value()
+print(value)  # 100
+# 処理を順番に整理すると次の流れです。
+#   job.result() を呼び出す。
+#   Result オブジェクト（クラス）が返る。
+#   返されたオブジェクトの get_value() を呼び出す。
+#   100 が返る。
+#
+# メソッドを連続して呼び出す
+# 先ほどのコードは、次のように短く書くこともできます。
+job = Job()
+print(job.result().get_value())  # 100
+# つまり、
+# job.result().get_value() は、result() の戻り値に対して get_value() を呼び出しているということです。
+# ここまでが、通常のPythonでのメソッドの連続呼び出しです。
+#
+# 同じ構造をモックで作る
+# では、この処理をモックで再現してみます。
+from unittest.mock import Mock
+mock_job = Mock()
+mock_job.result.return_value.get_value.return_value = 100
+print(mock_job.result().get_value())  # 100
+# 重要なのは、次の1行です。
+mock_job.result.return_value.get_value.return_value = 100
+# これを分解します。
+#   部分	                  意味
+#   mock_job	          最初のモックオブジェクト
+#   .result	              result という名前のモック
+#   .return_value	      result() を呼び出したときに返るオブジェクト
+#   .get_value	          そのオブジェクトの get_value という名前のモック
+#   .return_value = 100	  get_value() の戻り値を100に設定
+# ここで、Mock の便利な特徴があります。
+# 存在する属性を事前に定義していなくても、Mock はアクセスされた属性に対応する子モックを自動的に作成できます。
+# そのため、mock_job.result や mock_job.result.return_value.get_value を個別に Mock() で作成する必要がありません。
+# これは通常のPythonオブジェクトとは異なる、Mock 特有の動作です。
+#
+# STEP 6-4のコードとの対応
+# ここで、以前のコードに戻ります。
+mock_increment_job.result.return_value.to_dataframe.side_effect = RuntimeError(
+    "データ取得に失敗しました"
+)
+# このコードは、次の呼び出しを想定しています。
+mock_increment_job.result().to_dataframe()
+# 対応関係は次のとおりです。
+#   モックの設定	                        実際の呼び出し
+#   result.return_value	                result() が返すオブジェクト
+#   result.return_value.to_dataframe	戻り値の to_dataframe メソッド
+#   .side_effect = RuntimeError(...)	to_dataframe() を呼び出したときに例外を発生させる
+# つまり、result() は成功するが、その後の to_dataframe() で失敗する状況を作っています。
+# これが、STEP 6-4で行ったデータ取得失敗テストの仕組みです。
+#
+# 演習：メソッドの連続呼び出しをモックで再現する
+# 今回は、まだBigQueryを使用しません。
+# 要件
+#   Mock をインポートする。
+#   mock_job というモックを作成する。
+#   mock_job.result().get_value() の戻り値が 500 になるよう、return_value を設定する。
+#   mock_job.result().get_value() を実行して結果を表示する。
+#   mock_job.result.call_count を表示する。
+#   mock_job.result.return_value.get_value.call_count を表示する。
+from unittest.mock import Mock
+mock_job = Mock()
+mock_job.result.return_value.get_value.return_value = 500
+print(
+    mock_job.result().get_value()
+)
+print(mock_job.result.call_count)
+print(mock_job.result.return_value.get_value.call_count)
+
+## BigQueryの異常系テストを再構築する
+#
+# ここまで学習した内容を使い、STEP 6-4で登場したBigQueryの異常系テストを理解していきます。
+# ただし、最初から以前の長いテストコードを再現することはしません。
+# まずは、BigQueryの処理を模した小さな関数を用意し、データ取得時のエラーをモックで再現するところから始めます。
+# 今回テストする関数
+# 次のコードを見てください。
+def fetch_data(client):
+    try:
+        job = client.query("SELECT * FROM sales")
+        result = job.result()
+        df = result.to_dataframe()
+        return {
+            "status": "OK",
+            "data": df
+        }
+    except RuntimeError as e:
+        return {
+            "status": "ERROR",
+            "message": str(e)
+        }
+# この関数は、BigQueryの処理を想定したものです。ただし、今回は本物のBigQueryには接続しません。
+#   client.query("SELECT * FROM sales") クエリを実行し、ジョブを取得
+#      ↓
+#   job.result() クエリの実行結果を取得
+#     ↓
+#   result.to_dataframe() DataFrameとしてデータを取得
+#     ↓
+#   正常終了なら OK、RuntimeErrorが発生したら ERROR
+# 今回は、最後の to_dataframe() でエラーが発生する状況をテストします。
+#
+# どこにモックを設定すればよいか？
+# 今回の関数は、client を引数として受け取ります。
+# そのため、本物のBigQueryクライアントではなく、モックを引数として渡すことができます。
+mock_client = Mock()
+# この場合、patch() は必要ありません。
+# なぜなら、関数が外部から受け取った client をそのまま使用する構造になっているためです。
+# これは、STEP 6-4の元の関数との重要な違いです。
+# 元の関数は内部で bigquery.Client() を作成していたため、patch() による差し替えが必要でした。
+# 一方、今回の関数は、引数でモックを直接渡せます。
+#
+# モックの構造を整理する
+# 今回、失敗させたいのは次の処理です。
+result.to_dataframe()
+# しかし、その前には次の処理があります。
+job = client.query("SELECT * FROM sales")
+result = job.result()
+# したがって、モックの呼び出し構造は次のようになります。
+mock_client.query().result().to_dataframe()
+# ここで、前回学習した return_value の考え方が使えます。
+#   実際の呼び出し	            モック上の対応
+#   client.query(...)	    mock_client.query.return_value
+#   job.result()	        mock_client.query.return_value.result.return_value
+#   result.to_dataframe()	mock_client.query.return_value.result.return_value.to_dataframe
+# 最後の to_dataframe() でエラーを発生させたい場合は、そのモックの side_effect に例外を設定します。
+#
+# 演習：データ取得失敗のテスト
+# 使用する関数
+# 次の関数をそのまま使用してください。
+def fetch_data(client):
+    try:
+        job = client.query("SELECT * FROM sales")
+        result = job.result()
+        df = result.to_dataframe()
+        return {
+            "status": "OK",
+            "data": df
+        }
+    except RuntimeError as e:
+        return {
+            "status": "ERROR",
+            "message": str(e)
+        }
+# 要件
+#   Mock をインポートする。
+#   上記の fetch_data() を定義する。
+#   mock_client というモックを作成する。
+#   mock_client.query().result().to_dataframe() が呼び出されたときに、
+#   RuntimeError("データ取得に失敗しました") が発生するよう side_effect を設定する。
+#   fetch_data(mock_client) を実行し、結果を result に代入する。
+#   result["status"] と result["message"] を表示する。
+#   mock_client.query.call_count を表示する。
+from unittest.mock import Mock
+mock_client = Mock()
+mock_client.query.return_value.result.return_value.to_dataframe.side_effect = RuntimeError("データ取得に失敗しました")
+result = fetch_data(mock_client)
+print(result)
+print(mock_client.query.call_count)
+
+## patch.object() の仕組み
+#
+# ここからは、以前のSTEP 6-4で使用した、次のコードを理解していきます。
+with patch.object(bigquery, "Client") as mock_client_class:
+# これまで学習した patch() と何が違うのかを確認します。
+#
+# patch() と patch.object() の違い
+# 先般の段階では、次のように記述しました。
+with patch("__main__.get_tax_rate") as mock_tax_rate:
+# これは、文字列で指定した get_tax_rate を一時的にモックへ差し替える方法でした。
+# 一方、patch.object() は、オブジェクトと属性名を別々に指定する方法です。
+# 例えば、次のようなコードがあるとします。
+class Service:
+    def get_price(self):
+        return 1000
+# この場合、次のように差し替えられます。
+from unittest.mock import patch
+with patch.object(Service, "get_price") as mock_get_price:
+    mock_get_price.return_value = 500
+    service = Service()
+    print(service.get_price())  # 500
+# ここでは、
+#   Service：差し替え対象を持つオブジェクト（クラス）
+#   "get_price"：差し替えたい属性（メソッド）の名前
+#   mock_get_price：差し替えに使われるモック
+# という対応になっています。
+# with ブロックを抜けると、Service.get_price は元に戻ります。
+#
+# BigQueryの場合はどうなるか
+# BigQueryでは、通常、次のようにクライアントを作成します。
+from google.cloud import bigquery
+client = bigquery.Client()
+# この bigquery.Client を一時的にモックへ差し替えたい場合に、次のコードを使用できます。
+with patch.object(bigquery, "Client") as mock_client_class:
+# ここで注意したいのは、mock_client_class と mock_client_class() は異なるということです。
+mock_client_class    # これは、bigquery.Client の代わりに置かれたモックそのものです。
+mock_client_class()  # これは、そのモックを呼び出したときの戻り値です。
+# つまり、実際のプログラムで、
+client = bigquery.Client()
+# が実行されると、差し替え中は、
+client = mock_client_class()
+# と同じ構造になります。
+# そのため、クライアントの query() を設定する場合は、次のように return_value を経由します。
+mock_client_class.return_value.query.return_value
+# これは、先般の段階で直接 mock_client を作成した場合との違いです。
+#
+# 演習：クラスをモックに差し替える
+# 今回はBigQueryへの接続は行わず、通常のPythonクラスで確認します。
+# 使用するコード
+class DataClient:
+    def fetch(self):
+        return "本物のデータ"
+
+def get_data():
+    client = DataClient()
+    return client.fetch()
+print(get_data())
+# 要件
+#   unittest.mock から patch をインポートする。
+#   上の DataClient クラスと get_data() 関数を定義する。
+#   差し替え前に get_data() を実行して表示する。
+#   with patch("__main__.DataClient") as mock_client_class: を使用して、DataClient を一時的に差し替える。
+#   mock_client_class.return_value.fetch.return_value に "モックのデータ" を設定する。
+#   with ブロック内で get_data() を実行して表示する。
+#   with ブロック終了後、再び get_data() を実行して表示する。
+from unittest.mock import patch
+with patch("__main__.DataClient") as mock_client_class:
+    mock_client_class.return_value.fetch.return_value = "モックのデータ"
+    print(get_data())
+print(get_data())
+
+## patch.object() と patch() の対応を確認する
+#
+# 前回の説明では patch.object() を紹介しましたが、演習では patch() を使いました。
+# ここで、両者の違いを明確にしておきます。
+# 今回のように、直接実行しているPythonファイルに DataClient が定義されている場合、次の2つは同じ対象を差し替えます。
+# patch()
+with patch("__main__.DataClient") as mock_client_class:
+    pass
+# patch.object()
+import __main__
+with patch.object(__main__, "DataClient") as mock_client_class:
+    pass
+# 違いは、差し替え対象の指定方法です。
+#   方法	             指定方法
+#   patch()          "__main__.DataClient" という文字列
+#   patch.object()   __main__ というモジュールオブジェクトと "DataClient" という属性名
+# どちらも、with ブロックの間だけ DataClient をモックに差し替えます。
+#
+# 演習：patch.object() を使う
+# 今回は、先のコードを少し変更するだけです。
+# 使用するコード
+class DataClient:
+    def fetch(self):
+        return "本物のデータ"
+def get_data():
+    client = DataClient()
+    return client.fetch()
+# 要件
+#   import __main__ と from unittest.mock import patch を記述する。
+#   上記のクラスと関数を定義する。
+#   with patch.object(__main__, "DataClient") as mock_client_class: を使用する。
+#   fetch() の戻り値を "差し替え成功" に設定する。
+#   with ブロックの前・中・後で get_data() を実行し、それぞれ表示する。
+import __main__
+from unittest.mock import patch
+print(get_data())
+with patch.object(__main__, "DataClient") as mock_client_class:
+    mock_client_class.return_value.fetch.return_value = "差し替え成功"
+    print(get_data())
+print(get_data())
+
+## BigQueryの異常系テストを組み立てる
+#
+# ここまで学習した内容を組み合わせて、STEP 6-4で使用したモックの構造を再現します。
+# 今回は、BigQueryクライアントの生成からデータ取得失敗までを一つのテストで扱いますが、本物のBigQueryには接続しません。
+# 新しいモック機能は登場しません。
+# 今回テストする関数
+# 次のコードを使用します。
+class BigQueryClient:
+    def query(self, sql):
+        raise NotImplementedError("今回は本物のクエリを実行しません")
+
+def fetch_sales():
+    try:
+        client = BigQueryClient()
+        job = client.query("SELECT * FROM sales")
+        result = job.result()
+        df = result.to_dataframe()
+        return {
+            "status": "OK",
+            "data": df
+        }
+    except RuntimeError as e:
+        return {
+            "status": "ERROR",
+            "message": str(e)
+        }
+# BigQueryClient は、今回の演習用に作ったクラスです。Google Cloudの実際の bigquery.Client ではありません。
+# query() には NotImplementedError を設定していますが、テストではクラスそのものをモックに差し替えるため、この処理は実行されません。
+#
+# 今回のテストで確認したいこと
+# fetch_sales() の処理は、次の順番です。
+#   BigQueryClient()
+#     ↓
+#   client.query(...)
+#     ↓
+#   job.result()
+#     ↓
+#   result.to_dataframe()
+# このうち、to_dataframe() だけが RuntimeError を発生させる状況を作ります。
+# その結果、fetch_sales() が例外を捕捉して、ERROR を返すことを確認します。
+#
+# モックを設定する対象
+# 今回は fetch_sales() の内部で BigQueryClient() を作成しています。
+# したがって引数でモックを渡すことはできないため、patch.object() を使用します。
+import __main__
+from unittest.mock import patch
+with patch.object(__main__, "BigQueryClient") as mock_client_class:
+    pass
+# この mock_client_class は、BigQueryClient を差し替えたモックです。
+# 実際のクライアントに相当するモックは、次のように取得できます。
+mock_client = mock_client_class.return_value
+# ここから先は、先般の学習した構造と同じです。
+mock_client.query().result().to_dataframe()
+# 今回は、この最後の呼び出しに例外を設定してください。
+#
+# 演習：クライアント生成からデータ取得失敗まで
+# 要件
+#   import __main__ と from unittest.mock import patch を記述する。
+#   上記の BigQueryClient クラスと fetch_sales() 関数を定義する。
+#   patch.object() で BigQueryClient をモックに差し替える。
+#   mock_client_class.return_value を mock_client に代入する。
+#   mock_client.query().result().to_dataframe() が呼び出されたとき、
+#   RuntimeError("データ取得に失敗しました") が発生するように設定する。
+#   with ブロック内で fetch_sales() を実行する。
+#   戻り値の辞書と、mock_client.query.call_count を表示する。
+import __main__
+from unittest.mock import patch
+with patch.object(__main__, "BigQueryClient") as mock_client_class:
+    mock_client = mock_client_class.return_value
+    mock_client.query.return_value.result.return_value.to_dataframe.side_effect = RuntimeError("データ取得に失敗しました")
+    print(fetch_sales())
+    print(mock_client.query.call_count)
+
+## 2回の query() に異なる結果を返す
+#
+# 元のSTEP 6-4では、次のコードを使用していました。
+mock_client.query.side_effect = [
+    mock_watermark_job,
+    mock_increment_job
+]
+# ここまでの学習内容を使えば、このコードの意味を理解できます。
+#
+# なぜ2つのジョブが必要だったのか？
+# STEP 6-3で作成したウォーターマーク管理付きパイプラインでは、BigQueryへの問い合わせを複数回行っていました。
+# 代表的には、次の2つです。
+#   呼び出し	        目的
+#   1回目の query()	前回処理したウォーターマークを取得する
+#   2回目の query()	ウォーターマークより新しいデータを取得する
+# 異常系テストでは、次の状況を再現したかったわけです。
+# 「1回目のウォーターマーク取得は成功するが、2回目の増分データ取得で失敗する。」
+# そのため、2種類のジョブモックを用意していました。
+#
+# side_effect のリストを復習する
+# 先般で、次のコードを学習しました。
+mock_task.side_effect = [100, 200]
+print(mock_task())  # 100
+print(mock_task())  # 200
+# これと同じ仕組みです。
+mock_client.query.side_effect = [
+    mock_watermark_job,
+    mock_increment_job
+]
+# この設定では、
+#   1回目の query() は mock_watermark_job を返す。
+#   2回目の query() は mock_increment_job を返す。
+# という動作になります。
+# さらに、それぞれのジョブに異なる動作を設定できます。
+#
+# 今回の演習で使用する関数
+def fetch_incremental_data(client):
+    try:
+        watermark_job = client.query("SELECT MAX(last_date) FROM watermark")
+        watermark_df = watermark_job.result().to_dataframe()
+
+        increment_job = client.query("SELECT * FROM sales WHERE sale_date > last_date")
+        increment_df = increment_job.result().to_dataframe()
+
+        return {
+            "status": "OK",
+            "watermark": watermark_df,
+            "data": increment_df
+        }
+
+    except RuntimeError as e:
+        return {
+            "status": "ERROR",
+            "message": str(e)
+        }
+# この関数は、BigQueryの問い合わせを模した学習用コードです。SQLは実行せず、モックだけで動作を確認します。
+# 今回は、1回目の to_dataframe() が "2026-11-18" を返し、2回目の to_dataframe() がエラーになるよう設定します。
+#
+# 演習：2回目のデータ取得だけを失敗させる
+# 要件
+#   Mock をインポートする。
+#   上記の fetch_incremental_data() を定義する。
+#   mock_client、mock_watermark_job、mock_increment_job の3つのモックを作成する。
+#   mock_watermark_job.result().to_dataframe() が "2026-11-18" を返すよう設定する。
+#   mock_increment_job.result().to_dataframe() が RuntimeError("増分データ取得に失敗しました") を発生させるよう設定する。
+#   mock_client.query.side_effect に、2つのジョブモックを順番に設定する。
+#   fetch_incremental_data(mock_client) を実行する。
+#   戻り値の辞書と、mock_client.query.call_count を表示する。
+from unittest.mock import Mock
+mock_client = Mock()
+mock_watermark_job = Mock()
+mock_increment_job = Mock()
+
+mock_watermark_job.result.return_value.to_dataframe.return_value = "2026-11-18"
+mock_increment_job.result.return_value.to_dataframe.side_effect = RuntimeError("増分データ取得に失敗しました")
+mock_client.query.side_effect = [
+    mock_watermark_job,
+    mock_increment_job
+]
+print(fetch_incremental_data(mock_client))
+print(mock_client.query.call_count)
+
+
+### STEP 6-5｜パイプラインのスケジュール実行
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
