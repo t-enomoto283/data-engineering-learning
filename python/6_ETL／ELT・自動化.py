@@ -2353,6 +2353,7 @@ def sample_pipeline(should_fail=False):
 # 次の引数を受け取る関数を作成してください。
 import time
 import json
+from datetime import datetime
 
 def execute_pipeline(pipeline_name, should_fail=False):
     start_time = datetime.now().isoformat()
@@ -2457,76 +2458,84 @@ print(error_low)
 
 
 ### STEP 6-6.5｜実行履歴から異常を検知する
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# ここまでで、実行ログを保存する仕組みは完成しました。
+# 次は、そのログを使って異常を検知する処理を作ります。
+# 今回は新しいライブラリは使用しません。これまで学習したpandasの抽出・集計を応用します。
+#
+# 演習：パイプラインの実行状況を集計する
+# 先ほど作成した pipeline_log_df を使用します。
+# 次の引数を受け取る関数を作成してください。
+
+def monitor_pipeline(log_df, pipeline_name):
+    extract_row = log_df.loc[
+        log_df["pipeline_name"] == pipeline_name
+    ]
+    total_runs = extract_row.shape[0]
+    success_runs = (extract_row["status"] == "SUCCESS").sum()  # Pythonでは True は 1 False は 0 で扱われるため.sum()
+    error_runs = (extract_row["status"] == "ERROR").sum()
+    if error_runs >= 1:
+        monitor_status = "ALERT"
+    else:
+        monitor_status = "OK"
+    return {
+        "pipeline_name": pipeline_name,
+        "total_runs": total_runs,
+        "success_runs": success_runs.item(),
+        "error_runs": error_runs.item(),
+        "monitor_status": monitor_status
+    }
+
+# 実装要件
+#   log_df から、指定された pipeline_name の行だけを抽出する。
+#   抽出したデータの総実行回数を求める。
+#   status == "SUCCESS" の件数を求める。
+#   status == "ERROR" の件数を求める。
+#   エラー件数が1件以上なら "ALERT"、0件なら "OK" と判定する。
+#   次の5項目を辞書として返す。
+#     キー	            内容
+#     pipeline_name	    指定したパイプライン名
+#     total_runs	    総実行回数
+#     success_runs	    成功回数
+#     error_runs	    エラー回数
+#     monitor_status	"ALERT" または "OK"
+
+# テストケース
+# テスト①：エラーが存在するパイプライン
+result = monitor_pipeline(pipeline_log_df, "sales_daily")
+print(result)
+# 今回保存した2件だけが存在する場合の期待結果：
+# {
+#     "pipeline_name": "sales_daily",
+#     "total_runs": 2,
+#     "success_runs": 1,
+#     "error_runs": 1,
+#     "monitor_status": "ALERT"
+# }
+
+# テスト②：エラーが存在しないパイプライン
+# こちらは、別のパイプラインの正常実行ログを1件追加して確認してください。
+execute_pipeline("inventory_daily", should_fail=False)
+pipeline_log_df = pd.read_json("pipeline_log.jsonl", lines=True)
+
+result = monitor_pipeline(pipeline_log_df, "inventory_daily")
+print(result)
+# 期待結果：
+# {
+#     "pipeline_name": "inventory_daily",
+#     "total_runs": 1,
+#     "success_runs": 1,
+#     "error_runs": 0,
+#     "monitor_status": "OK"
+# }
+
+# 実務上の補足
+# 今回の監視では、過去に1件でもエラーがあれば ALERT としています。
+# ただし、実務では次のような監視も考えられます。
+#   直近実行の監視：最後の実行が成功したか。
+#   連続失敗の監視：3回連続で失敗していないか。
+#   未実行の監視：予定時刻を過ぎても実行履歴がないか。
+#   処理時間の監視：通常より処理に時間がかかっていないか。
+# 今回作成した実行ログは、これらの監視を実装する際の基礎になります。
 
 
 

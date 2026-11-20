@@ -1,2 +1,3 @@
 {"pipeline_name": "sales_daily", "start_time": "2026-11-20T09:58:26.249720", "end_time": "2026-11-20T09:58:26.249755", "status": "SUCCESS", "processed_rows": 5, "duration_sec": 5.2000104915350676e-06, "error_message": null}
 {"pipeline_name": "sales_daily", "start_time": "2026-11-20T10:00:03.777971", "end_time": "2026-11-20T10:00:03.777989", "status": "ERROR", "processed_rows": 0, "duration_sec": 9.299983503296971e-06, "error_message": "データ取得に失敗しました"}
+{"pipeline_name": "inventory_daily", "start_time": "2026-11-20T18:30:59.520063", "end_time": "2026-11-20T18:30:59.520078", "status": "SUCCESS", "processed_rows": 5, "duration_sec": 3.3999967854470015e-06, "error_message": null}
