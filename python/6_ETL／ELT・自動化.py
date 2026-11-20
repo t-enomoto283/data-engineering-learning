@@ -2022,84 +2022,441 @@ print(mock_client.query.call_count)
 
 
 ### STEP 6-5｜パイプラインのスケジュール実行
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# 今回は、STEP 6-3で学習したウォーターマーク付き増分処理を、決められた時刻に自動実行する仕組みを学びます。
+# これまでは、PyCharmから自分でPythonコードを実行していました。今回は、その実行をスケジュールに従って開始できるようにすることが目標です。
+# 次の3点を理解・実装します。
+#   スケジュール実行の仕組みを理解する。
+#   Pythonで指定時刻に処理を実行する仕組みを作る。
+#   パイプラインを定期実行する際の注意点を理解する。
+# 今回は、外部ライブラリの schedule を使用します。
+# 実務ではWindowsタスクスケジューラ、cron、Cloud Schedulerなどの方法もありますが、最初はPythonコード内で動作を確認できる方法から始めます。
+
+# スケジュール実行とは何か？
+# これまでの実行方法は、次のようなものでした。
+#   手動実行 PyCharmで実行ボタンを押す → Pythonのパイプラインが実行される
+# 一方、スケジュール実行では、次のようになります。
+#   スケジュール実行 あらかじめ実行間隔や時刻を登録 → 指定時刻になったかを確認 → Pythonのパイプラインを自動実行
+# 例えば、毎日午前9時にデータ取得処理を実行する、といった運用が考えられます。
+# ただし、今回使用するライブラリの schedule は、Pythonプログラムが起動している間だけ動作する仕組みです。
+# パソコンをシャットダウンした状態でも実行できるわけではありません。
+
+# schedule ライブラリの基本
+# ① インストール
+# PyCharmのターミナルで、次のコマンドを実行してください。
+pip install schedule
+#
+# ② 定期実行する関数を作成する
+# まずは通常のPython関数です。
+from datetime import datetime
+def run_pipeline():
+    print(f"パイプライン実行：{datetime.now()}")
+# この関数は、呼び出された時刻を表示します。
+#
+# ③ 実行間隔を登録する
+import schedule
+schedule.every(5).seconds.do(run_pipeline)
+# これは、run_pipeline() を5秒間隔で実行する予定として登録する処理です。
+# ここで注意したいのは、この1行だけでは関数は実行されないということです。
+# do() に渡しているのは run_pipeline であり、run_pipeline() ではありません。
+# 前者は関数そのものを渡しています。後者はその場で関数を呼び出してしまいます。
+#
+# ④ 実行予定を確認する
+schedule.run_pending()
+# この処理は、登録されているジョブのうち、実行時刻に達したものを実行します。
+# ただし、1回呼び出しただけでは、継続的に時刻を確認できません。
+# そこで、while を使います。
+#while True:
+    schedule.run_pending()
+    time.sleep(1)
+# while True により繰り返し処理を行い、time.sleep(1) で1秒待機します。
+# このループは自動的には終了しないため、実際の演習では終了条件を設定します。
+
+# 今回の演習で作る仕組み
+# 今回は、5秒間隔で処理を実行し、3回実行したら自動終了するプログラムを作ります。
+#   schedule.every(5).seconds.do(...) 5秒間隔で実行するジョブを登録
+#     ↓
+#   run_pending() で実行時刻を確認
+#     ↓
+#   実行回数をカウント
+#     ↓
+#   3回実行したら終了
+
+# 演習：スケジュールによるパイプラインの自動実行
+# 次の要件を満たすPythonコードを、自分で作成してください。
+# 要件
+#   schedule、time、datetime をインポートする。
+#   実行回数を管理する変数 execution_count を 0 で初期化する。
+#   run_pipeline() 関数を定義する。
+#   run_pipeline() が呼び出されるたびに、execution_count を1増やす。
+#   関数内で、実行回数と現在日時を表示する。
+#   schedule を使用して、run_pipeline() を5秒間隔で実行するよう登録する。
+#   while ループ内で schedule.run_pending() を呼び出す。
+#   time.sleep(1) を使い、ループの各周回で1秒待機する。
+#   execution_count が3になったらループを終了する。
+#   最後に "スケジュール実行終了" と表示する。
+
+import schedule
+from datetime import datetime
+import time
+
+execution_count = 0
+def run_pipeline():
+    global execution_count
+    execution_count += 1
+    print(f"パイプライン実行 {execution_count}回目：{datetime.now()}")
+    if execution_count == 3:
+        print("スケジュール実行終了")
+
+schedule.every(5).seconds.do(run_pipeline)
+while execution_count < 3:
+    schedule.run_pending()
+    time.sleep(1)
+
+# ヒント
+# 関数の外側で定義した変数を、関数内で変更する場合は global を使用できます。
+execution_count = 0
+def run_pipeline():
+    global execution_count
+    execution_count += 1
+# while の条件には、実行回数を使用できます。
+#while execution_count < 3:
+    # 実行予定の確認
+    # 1秒待機
+
+# 期待する実行結果
+#   パイプライン実行 1回目：2026-11-19 10:00:05
+#   パイプライン実行 2回目：2026-11-19 10:00:10
+#   パイプライン実行 3回目：2026-11-19 10:00:15
+#   スケジュール実行終了
+
+
+### STEP 6-5.5｜増分パイプラインの定期実行設計 応用編
+# ここからは、STEP 6-3で学習したウォーターマーク付き増分パイプラインとの接続を考えます。
+# 今回は、スケジュール実行そのものよりも、定期実行するパイプラインを安全に運用するための設計に焦点を当てます。
+#
+# 実務で問題になりやすい3つの状況
+# 例えば、毎日午前9時に増分処理を実行するパイプラインがあるとします。
+#   状況	                    起こり得る問題	                対応の考え方
+#   1.新しいデータがない	    毎回同じデータを処理する	        ウォーターマークで処理対象を限定
+#   2.前回の処理が失敗した	    未処理データが残る	            成功時だけウォーターマークを更新
+#   3.前回の処理がまだ実行中	同じデータを二重処理する可能性	同時実行を防止する
+# このうち、最初の2つはSTEP 6-3で学習したウォーターマーク管理と関係しています。
+# 3つ目の同時実行防止は、スケジュール実行で新たに意識したい問題です。
+
+# schedule の動作について
+# 今回使用した schedule は、基本的に run_pending() を呼び出したスレッド上で、登録したジョブを順番に実行します。
+# 例えば、次のように登録したとします。
+schedule.every(5).seconds.do(run_pipeline)
+# 仮に run_pipeline() が10秒かかる場合でも、通常の同期実行では、同じスケジューラがその処理を並列に起動するわけではありません。
+# また、schedule は、実行できなかった回数を後からすべて補填する仕組みでもありません。
+# ただし、同じPythonプログラムを別プロセスで2つ起動した場合は、それぞれが独立して処理を実行するため、二重実行の可能性があります。
+# そのため、本番運用ではスケジューラだけでなく、パイプライン側にも実行制御が必要になる場合があります。
+
+# 応用演習：実行中の処理を重複起動させない
+# 今回は、実際のBigQueryへの接続を行わず、実行状態を表す変数を使用して動作を確認します。
+#
+# 今回の設計
+# is_running という変数を用意します。
+#   False：パイプラインは実行されていない。
+#   True：パイプラインが実行中。
+# run_pipeline() が呼び出されたとき、is_running が True なら、新しい処理を開始せず終了します。
+# ただし、この方法は同じPythonプロセス内の状態管理です。複数プロセス間の同時実行を防止する仕組みではありません。
+# また、今回の同期スケジューラでは通常、ジョブが並列実行されないため、実行中フラグの確認は追加の安全策として扱います。
+#
+# 演習要件
+#   time をインポートする。
+#   is_running = False を定義する。
+#   run_pipeline() 関数を定義する。
+#   is_running が True の場合、"実行中のためスキップ" と表示して終了する。
+#   False の場合、is_running = True に変更し、"パイプライン実行開始" と表示する。
+#   try ブロック内で time.sleep(3) を実行する。
+#   finally ブロックで is_running = False に戻し、"パイプライン実行終了" と表示する。
+#   最初に is_running を表示する。
+#   run_pipeline() を1回実行する。
+#   実行後の is_running を表示する。
+#   次に is_running = True を設定し、再度 run_pipeline() を呼び出して、スキップ処理を確認する。
+#
+# 期待する実行結果
+#   False
+#   パイプライン実行開始
+#   パイプライン実行終了
+#   False
+#   実行中のためスキップ
+
+import time
+
+is_running = False
+print(is_running)
+
+def run_pipeline():
+    global is_running
+    if is_running:
+        print("実行中のためスキップ")
+        return
+    else:
+        is_running = True
+        print("パイプライン実行開始")
+    try:
+        time.sleep(3)
+    finally:
+        is_running = False
+        print("パイプライン実行終了")
+
+run_pipeline()
+print(is_running)
+is_running = True
+run_pipeline()
+
+# ここで、STEP 6-3のウォーターマーク付き増分パイプラインとの関係を整理します。
+# 既存パイプラインとスケジューラの接続
+# STEP 6-3では、次の関数を作成していました。
+process_sales_with_persistent_watermark(
+    project_id,
+    sql,
+    watermark_table,
+    pipeline_name
+)
+
+# この関数をスケジュール実行したい場合、基本的には、必要な引数を渡して呼び出す関数を用意し、それを schedule に登録する構成になります。
+def scheduled_pipeline():
+    result = process_sales_with_persistent_watermark(
+        project_id,
+        sql,
+        watermark_table,
+        pipeline_name
+    )
+    return result
+
+schedule.every().day.at("09:00").do(scheduled_pipeline)
+
+# これは接続方法を示す概念例です。実際に動かすには、STEP 6-3で使用した関数と引数を用意する必要があります。
+# また、ウォーターマークがあることと、二重実行を完全に防止できることは別問題です。
+# 例えば、2つのプロセスが同時に同じウォーターマークを読み取った場合、両方が同じ増分データを処理する可能性があります。
+# 今回の is_running = True / False は、同一プロセス内での簡易的な状態管理であり、別プロセスや別サーバーからの重複起動までは防げません。
+# 実務では、必要に応じて外部のロック機構やジョブ実行基盤による同時実行制御を検討します。
+
+
+### STEP 6-6｜パイプラインの監視・実行結果管理
+# これまでに学んだ増分処理、ウォーターマーク、例外処理、スケジュール実行を踏まえ、
+# 今回はパイプラインがいつ実行され、成功したのか、失敗したのかを記録する仕組みを作ります。
+#
+# データエンジニアリングでは、パイプラインを自動実行できるだけでは不十分です。
+# 例えば、毎朝9時に実行されるパイプラインがあったとしても、次のことが分からなければ運用に困ります。
+#   今日の処理は成功したのか？
+#   何件のデータを処理したのか？
+#   失敗した場合、どんなエラーが発生したのか？
+#   処理に何秒かかったのか？
+#
+# これらを確認できるようにするのが、今回学習する「実行結果管理（Execution Logging）」です。
+# 監視（Monitoring）は、記録された実行結果を確認し、失敗や異常を検知することです。
+# 今回はその基礎となる、実行ログの記録と簡単な異常判定を実装します。
+# BigQueryへの接続はせず、まずローカルファイルで実行履歴を保存し、後から確認できる仕組みを作ります。
+
+# パイプラインの実行ログとは？
+# 例えば、売上データを毎日取得するパイプラインを考えます。
+#   スケジュール実行：毎日午前9時
+#     ↓
+#   売上データ処理：取得 -> 加工 -> 保存
+#     ↓
+#   実行ログを保存：日時・ステータス・処理件数・処理時間・エラー
+#     ↓
+#   pandasで実行履歴を確認：失敗した実行を抽出
+#
+# 保存するログの例です。
+#   pipeline_name   status    processed_rows   duration_sec	 error_message
+#   sales_daily	    SUCCESS	  120              2.4            null
+#   sales_daily	    SUCCESS	  0                1.1            null
+#   sales_daily	    ERROR     0                0.3            Connection failed
+# ここで重要なのは、処理件数が0件でも、必ずしも失敗ではないということです。
+# 増分処理では、新しいデータが存在しなければ0件で正常終了する場合があります。
+# したがって、processed_rows == 0 だけでエラーと判定してはいけません。
+
+# 新しい知識①：time.perf_counter()
+# 処理時間を測定するために使用します。
+import time
+start = time.perf_counter()
+time.sleep(2)
+duration = time.perf_counter() - start
+print(duration)  # 2.000696600007359
+# datetime.now() は「何時に実行されたか」を記録するのに適しています。
+# 一方、time.perf_counter() は、処理に何秒かかったかを測定するのに適しています。
+# この2つは目的が異なります。
+#
+# 新しい知識②：JSON Lines形式でログを保存する
+# 通常のJSONでは、辞書やリストを1つのJSONデータとして保存します。
+# 今回使用する JSON Lines（.jsonl） は、1行に1つのJSONオブジェクトを保存する形式です。
+# 例えば、次のようになります。
+{"pipeline_name": "sales_daily", "status": "SUCCESS", "processed_rows": 120}
+{"pipeline_name": "sales_daily", "status": "SUCCESS", "processed_rows": 0}
+{"pipeline_name": "sales_daily", "status": "ERROR", "processed_rows": 0}
+# 1回実行するたびに1行追加できるため、実行履歴の保存に向いています。
+#
+# 新しい知識③：json.dumps() とファイルへの追記
+import json
+log = {
+    "pipeline_name": "sales_daily",
+    "status": "SUCCESS",
+    "processed_rows": 120
+}
+with open("pipeline_log.jsonl", "a", encoding="utf-8") as f:
+    f.write(json.dumps(log, ensure_ascii=False) + "\n")
+# ここでは3つのポイントがあります。
+#   コード                意味
+#   "a"                  ファイルの末尾に追記する。存在しなければ作成する
+#   json.dumps()         Pythonの辞書をJSON形式の文字列に変換する
+#   ensure_ascii=False   日本語をそのまま保存できるようにする
+#   "\n"                 1回分のログごとに改行する
+# 仮に "w" で開くと既存のファイル内容が上書きされるため、今回は "a" を使用します。
+#
+# 新しい知識④：保存したログをpandasで読み込む
+import pandas as pd
+df = pd.read_json("pipeline_log.jsonl", lines=True)
+print(df)
+# lines=True は、JSON Lines形式のファイルを読み込むための指定です。
+# 通常のJSONファイルとは異なり、各行を独立したJSONデータとして扱います。
+#
+# 新しい知識⑤：成功・失敗をログに記録する
+# パイプラインの実行結果を記録する場合、処理の成功と失敗を区別する必要があります。
+# 基本的な構造は次のようになります。
+try:
+    # パイプライン本体を実行
+    status = "SUCCESS"
+except Exception as e:
+    status = "ERROR"
+    error_message = str(e)
+finally:
+    # 実行結果をログに保存
+    pass
+# ただし、実際には次の点にも注意します。
+#   ① エラー発生前に変数を初期化する
+#     例えば、error_message を正常終了時にもログに含めるなら、事前に None で初期化しておく必要があります。
+#   ② finally は正常終了・異常終了の両方で実行される
+#     そのため、ログの保存処理を配置する場所として利用できます。
+#   ③ エラーを記録することと、エラーを握りつぶすことは別
+#     実務では、エラーをログに記録したうえで、呼び出し元に例外を再送出する設計もあります。
+#     今回はまず、実行結果を辞書として返す方法で実装します。
+
+# 演習：パイプライン実行結果をJSON Linesに保存する
+# 今回は、パイプライン本体とログ記録処理を分離して実装します。
+#
+# ① パイプライン本体を用意する
+# 次の関数を使用してください。
+def sample_pipeline(should_fail=False):
+    if should_fail:
+        raise RuntimeError("データ取得に失敗しました")
+    return 5
+# この関数は、通常は処理件数として 5 を返します。
+# should_fail=True を渡すと、例外が発生します。
+# この関数自体は変更する必要はありません。
+#
+# ② execute_pipeline() を作成する
+# 次の引数を受け取る関数を作成してください。
+import time
+import json
+
+def execute_pipeline(pipeline_name, should_fail=False):
+    start_time = datetime.now().isoformat()
+    start = time.perf_counter()
+
+    status = "SUCCESS"
+    processed_rows = 0
+    error_message = None
+
+    try:
+        processed_rows = sample_pipeline(should_fail)
+    except Exception as e:
+        status = "ERROR"
+        error_message = str(e)
+    finally:
+        end_time = datetime.now().isoformat()
+        duration = time.perf_counter() - start
+        log = {
+            "pipeline_name": pipeline_name,
+            "start_time": start_time,
+            "end_time": end_time,
+            "status": status,
+            "processed_rows": processed_rows,
+            "duration_sec": duration,
+            "error_message": error_message
+        }
+        with open("pipeline_log.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(log, ensure_ascii=False) + "\n")
+    return log
+
+# 実装要件
+#   関数開始時に、現在日時を start_time に記録する。
+#   time.perf_counter() で処理時間の測定を開始する。
+#   status = "SUCCESS"、processed_rows = 0、error_message = None を初期化する。
+#   try 内で sample_pipeline(should_fail) を呼び出し、戻り値を processed_rows に格納する。
+#   except Exception as e で例外を捕捉し、status を "ERROR"、error_message を例外メッセージに変更する。
+#   finally 内で終了日時と処理時間を取得する。
+#   次の項目を含む辞書 log を作成する。
+#     キー              格納する内容
+#     pipeline_name	    引数で受け取った名前
+#     start_time	    開始日時（ISO形式の文字列）
+#     end_time	        終了日時（ISO形式の文字列）
+#     status	        "SUCCESS" または "ERROR"
+#     processed_rows	処理件数
+#     duration_sec	    処理時間（秒）
+#     error_message	    エラー内容。正常時は None
+#   log を pipeline_log.jsonl に1行追記する。
+#   最後に log を戻り値として返す。
+
+# 日時のISO形式への変換には、次のメソッドを使用できます。
+datetime.now().isoformat()
+
+# 正常系・異常系を実行する
+# 次の2ケースを実行してください。
+result1 = execute_pipeline("sales_daily", should_fail=False)
+print(result1)
+
+result2 = execute_pipeline("sales_daily", should_fail=True)
+print(result2)
+
+# 期待する実行結果
+# 正常系
+# {
+#     "pipeline_name": "sales_daily",
+#     "start_time": "2026-11-20T09:00:00",
+#     "end_time": "2026-11-20T09:00:00",
+#     "status": "SUCCESS",
+#     "processed_rows": 5,
+#     "duration_sec": 0.00001,
+#     "error_message": None
+# }
+#
+# 異常系
+# {
+#     "pipeline_name": "sales_daily",
+#     "start_time": "2026-11-20T09:01:00",
+#     "end_time": "2026-11-20T09:01:00",
+#     "status": "ERROR",
+#     "processed_rows": 0,
+#     "duration_sec": 0.00001,
+#     "error_message": "データ取得に失敗しました"
+# }
+
+# pandasで実行履歴を確認する
+# 最後に、保存したログファイルをpandasで読み込んでください。
+# そして、status が "ERROR" の行だけを抽出してください。
+# 期待する結果は、今回の2ケースだけが保存されている場合、正常系1行、異常系1行、エラー抽出結果1行です。
+# なお、過去の実行ログが残っている場合は、ファイルにその分の履歴も含まれます。
+
+import pandas as pd
+pipeline_log_df = pd.read_json("pipeline_log.jsonl", lines=True)
+error_low = pipeline_log_df.loc[
+    pipeline_log_df["status"] == "ERROR"
+]
+print(error_low)
+
+# 実務上の補足
+# 今回のコードに修正必須の箇所はありません。ただし、次の点は覚えておいてください。
+# except Exception で例外を捕捉してログに記録すると、今回の関数は例外を呼び出し元に伝えず、ERROR を含む辞書を返して終了します。
+# そのため、スケジューラや監視システム側が失敗を認識するには、戻り値の status を確認する必要があります。
+# 実務では、ログ保存後に例外を再送出する設計もあります。
+
+
+### STEP 6-6.5｜実行履歴から異常を検知する
 
 
 
