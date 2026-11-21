@@ -1,0 +1,2 @@
+{"pipeline_name": "sales_incremental", "status": "SUCCESS", "input_rows": 6, "processed_rows": 4, "old_watermark": "2026-11-01", "new_watermark": "2026-11-03", "executed_at": "2026-11-21T21:06:59.677914", "error": null}
+{"pipeline_name": "sales_incremental", "status": "SKIPPED", "input_rows": 6, "processed_rows": 0, "old_watermark": "2026-11-03", "new_watermark": "2026-11-03", "executed_at": "2026-11-21T21:08:23.424513", "error": null}

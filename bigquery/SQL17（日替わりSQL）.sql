@@ -514,3 +514,22 @@ GROUP BY a.customer_id, a.customer_name
 ORDER BY a.customer_id ASC;
 
 
+/*
+python・pandasの「STEP 7-3｜増分処理・再実行制御・ログ・監視の統合」において、下記の初期状態テーブルを作成
+  売上テーブル：`resonant-tract-508812-p9.sql_training.sales_incremental_step7`
+  状態テーブル（ウォーターマーク管理）：`resonant-tract-508812-p9.sql_training.pipeline_watermarks_step7`
+これらの作成した初期状態テーブルについて確認する目的のクエリ
+*/
+SELECT
+  *
+FROM `resonant-tract-508812-p9.sql_training.sales_incremental_step7`
+ORDER BY sale_id;
+
+SELECT
+  *
+FROM `resonant-tract-508812-p9.sql_training.pipeline_watermarks_step7`
+ORDER BY pipeline_name;
+
+
+
+
