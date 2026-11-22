@@ -1,0 +1,2 @@
+{"status": "SUCCESS", "input_rows": {"sales": 8, "products": 4}, "output_rows": 4, "total_sales": 24000, "executed_at": "2026-11-22T11:25:41.771620", "error": null}
+{"status": "FAILED", "input_rows": {"sales": 8, "products": 4}, "output_rows": 0, "total_sales": 0, "executed_at": "2026-11-22T11:40:10.841928", "error": "商品マスタに一致しない売上明細:    sale_id  sale_date product_id  ...  product_name  category     _merge\n6        7 2026-11-04       P999  ...           NaN       NaN  left_only\n\n[1 rows x 8 columns]"}

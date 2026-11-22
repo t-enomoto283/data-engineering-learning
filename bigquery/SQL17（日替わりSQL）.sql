@@ -531,5 +531,15 @@ FROM `resonant-tract-508812-p9.sql_training.pipeline_watermarks_step7`
 ORDER BY pipeline_name;
 
 
+/*
+python・pandasの「STEP 7-4｜最終総合演習」における関数 run_final_sales_pipeline によって作られた
+集計結果の保存用BigQueryテーブル（下記）を確認する目的のクエリ
+  保存先テーブル：`resonant-tract-508812-p9.sql_training.sales_summary_final_step7`
+*/
+SELECT
+  *
+FROM `resonant-tract-508812-p9.sql_training.sales_summary_final_step7`
+ORDER BY product_id;
+
 
 

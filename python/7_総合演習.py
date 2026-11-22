@@ -130,7 +130,7 @@ def run_sales_etl(sales_csv, products_csv, output_csv):
                 indicator=True
             )
         except MergeError as me:
-            raise ValueError(me)
+            raise ValueError(me) from me
 
         # 商品マスタに存在しない product_id が売上明細に含まれていないか確認
         not_match_row = join_table[
@@ -956,86 +956,376 @@ with open("sales_incremental_log.jsonl", "r", encoding="utf-8") as f:
         print(json.loads(line))
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+### STEP 7-4｜最終総合演習
+# STEP 7-1〜7-3では、CSVによるETL、BigQueryを使ったELT、ウォーターマークによる増分処理を実装してきました。
+# 今回は、それらの知識を統合して、データ品質検証からBigQueryへの保存、結果検証、ログ記録までを行う売上データパイプラインを実装します。
+#
+# 今回は、ECサイトの売上明細と商品マスタを扱います。
+# 2つのCSVを読み込み、データ品質を検証し、売上を集計したうえでBigQueryへ保存します。
+# さらに、BigQueryに保存されたデータを再取得して結果を検証し、処理結果をJSONL形式で記録します。
+#
+#         sales_final.csv 売上明細    products_final.csv 商品マスタ
+#                       └─────────┬─────────┘
+#     Python・pandas 必須列・欠損・重複・結合関係の検証、商品マスタ結合・売上集計
+#                                 ↓
+#              BigQuery：sales_summary_final_step7 集計結果を保存
+#                                 ↓
+#      結果検証・JSONLログ 保存後の行数・売上合計を確認 SUCCESS / FAILED を記録
+
+# 使用する知識
+#   関数定義・引数・戻り値            処理全体の関数化
+#   pd.read_csv()                 CSV読み込み
+#   DataFrame.columns             必須列の確認
+#   isna() / duplicated()         欠損・重複検証
+#   pd.to_datetime()              売上日付の変換
+#   pd.merge()                    商品マスタとの結合
+#   validate="many_to_one"        結合関係の検証
+#   groupby() / agg()             商品別売上集計
+#   bigquery.Client()             BigQuery接続
+#   load_table_from_dataframe()   集計結果の保存
+#   WRITE_TRUNCATE                再実行時の結果置き換え
+#   client.query()                保存結果の検証
+#   json.dumps()                  JSONLログ
+#   try / except / finally        例外処理・ログ記録
+#   データ品質と保存結果の一貫性        パイプライン全体の品質保証
+
+# 重要な技術・設計ポイント
+# ① データ品質検証はBigQueryへの保存前に実施する
+#   今回の処理では、入力データに問題がある場合、BigQueryへの保存を実行しません。
+#   例えば、商品マスタに存在しない product_id が売上明細に含まれていた場合、結合後に一部の売上が欠落する可能性があります。
+#   そのため、次の順番を守ります。
+#     必須列・欠損・重複の検証 → 商品マスタとの結合・未一致の検証 → 売上集計 → BigQueryへ保存
+#   今回は、必須列の欠落、指定列の欠損、主キー重複、商品マスタ未一致を検証対象とします。
+#
+# ② many_to_one による結合関係の検証
+#   売上明細と商品マスタの関係は次のとおりです。
+#     売上明細では、同じ product_id が複数行に出現してよい。
+#     商品マスタでは、product_id は一意でなければならない。
+#   したがって、結合では次の設定を使用します。
+validate="many_to_one"
+# また、how="left" と indicator=True を使用して、商品マスタに一致しなかった売上明細がないことを確認してください。
+#
+# ③ BigQueryへの保存は WRITE_TRUNCATE
+#   今回はSTEP 7-3のような増分処理ではありません。
+#   入力CSV全体を毎回処理し、最新の集計結果でBigQueryテーブルを置き換える方式です。
+#   したがって、WRITE_TRUNCATE を使用します。
+#   これにより、同じ入力データで正常に再実行しても、集計結果が二重に追加されることはありません。
+#   なお、保存対象は今回の演習用テーブル sales_summary_final_step7 のみとします。
+#
+# ④ 保存後にBigQueryから再取得して検証する
+#   pandasで正しく集計できたとしても、それだけで処理を完了としません。
+#   BigQueryへのロード完了後、保存したテーブルをSQLで取得し、以下を確認します。
+#     保存された集計結果の行数
+#     保存された売上合計金額
+#   これにより、Python側で計算した結果と、BigQueryに保存された結果が一致することを確認します。
+
+# 演習用データ
+# 今回使用するCSVは2つです。以下の内容で作成してください。
+#   sales_final.csv
+#   products_final.csv
+sales_final_df = pd.DataFrame({
+    "sale_id": [1, 2, 3, 4, 5, 6, 7, 8],
+    "sale_date": ["2026-11-01", "2026-11-01", "2026-11-02", "2026-11-02", "2026-11-03", "2026-11-03", "2026-11-04", "2026-11-04"],
+    "product_id": ["P001", "P002", "P001", "P003", "P002", "P003", "P004", "P001"],
+    "quantity": [2, 1, 3, 2, 2, 4, 3, 1],
+    "unit_price": [1200, 2500, 1200, 800, 2500, 800, 1500, 1200]
+})
+sales_final_df.to_csv("sales_final.csv", index=False)
+
+products_final_df = pd.DataFrame({
+    "product_id": ["P001", "P002", "P003", "P004"],
+    "product_name": ["ノート", "バッグ", "ペン", "ボトル"],
+    "category": ["文房具", "雑貨", "文房具", "生活用品"]
+})
+products_final_df.to_csv("products_final.csv", index=False)
+
+# 期待する商品別集計結果
+#   product_id	product_name	category	total_quantity	total_sales
+#   P001	    ノート	        文房具	    6	            7,200
+#   P002	    バッグ	        雑貨	        3	            7,500
+#   P003	    ペン	            文房具	    6	            4,800
+#   P004	    ボトル	        生活用品	    3	            4,500
+#   合計			                            18	            24,000
+# この集計結果をBigQueryに保存します。
+
+# 実装課題
+# 次の関数を実装してください。以下が必須の処理フローです。
+# A. Extract：入力データの取得
+#   sales_csv と products_csv をそれぞれpandasで読み込む。
+#   読み込んだ行数をそれぞれ取得する。
+#   sale_date を pd.to_datetime() で日付型に変換する。
+#   BigQuery接続に必要な project_id と dataset_id を使用する。
+#   今回の正常系データでは、sale_date はすべて日付として解釈できるものとします。
+# B. Validate：データ品質検証
+#   売上明細の必須列を検証する。
+#     sale_id, sale_date, product_id, quantity, unit_price
+#   商品マスタの必須列を検証する。
+#     product_id, product_name, category
+#   売上明細の必須列に欠損値がないことを確認する。
+#   商品マスタの必須列に欠損値がないことを確認する。
+#   売上明細の sale_id に重複がないことを確認する。
+#   商品マスタの product_id に重複がないことを確認する。
+#   証に失敗した場合は ValueError を発生させ、以降の加工・保存処理を行わない。
+#   補足： 必須列が存在しない場合は、欠損検証や日付変換より前に検出してください。
+#   したがって、実装時はAのCSV読み込み後、Bの必須列検証を行ってから sale_date を変換する順序で構いません。
+# C. Transform：結合・集計
+#   売上明細を左表、商品マスタを右表として product_id で結合する。
+#   how="left"、validate="many_to_one"、indicator=True を指定する。
+#   商品マスタに一致しない売上明細がある場合は ValueError を発生させる。
+#   各売上明細について、次の売上金額を計算する。
+#     sales_amount = quantity * unit_price
+#   product_id、product_name、category ごとに集計する。
+#   quantity の合計を total_quantity、sales_amount の合計を total_sales とする。
+#   集計結果を product_id の昇順に並べる。
+#   BigQueryに保存するDataFrameの列を次の5列に揃える。
+#     product_id, product_name, category, total_quantity, total_sales
+# D. Load：BigQueryへの保存
+#   bigquery.Client(project=project_id) で接続する。
+#   次のテーブルIDを作成する。
+#     f"{project_id}.{dataset_id}.sales_summary_final_step7"
+#   集計結果を load_table_from_dataframe() で保存する。
+#   書き込み方式には WRITE_TRUNCATE を使用する。
+#   .result() でロードジョブの完了を待つ。
+# E. Verify：保存結果の検証
+#   BigQueryの保存先テーブルからSQLで全行を取得する。
+#   to_dataframe(create_bqstorage_client=False) でpandasのDataFrameに変換する。
+#   BigQueryから取得した行数が、Pythonで作成した集計結果の行数と一致することを検証する。
+#   BigQueryから取得した total_sales の合計が、Pythonで計算した売上合計と一致することを検証する。
+#   不一致があれば ValueError を発生させる。
+#   関数内部の検証値を固定するのではなく、実際に処理したデータから計算した値との一致を検証する。
+# F. Logging：JSONLログ
+#   実行結果を log_file にJSONL形式で追記する。
+#   ログには以下の情報を記録する。
+#   {
+#     "status": "SUCCESS",
+#     "input_rows": {
+#         "sales": 8,
+#         "products": 4
+#         },
+#     "output_rows": 4,
+#     "total_sales": 24000,
+#     "executed_at": "実行日時",
+#     "error": null
+#   }
+#   executed_at には実行開始日時をISO形式の文字列で記録する。
+#   エラー発生時は status を "FAILED" とし、error にエラー内容を記録する。
+#   正常時・異常時のいずれも、ログを1行追記する。
+#   log_file は拡張子を含むファイルパスとして渡すものとします。関数内で .jsonl を追加する必要はありません。
+# G. Return・Exception：戻り値と例外処理
+#   正常終了時は、ログと同じ内容の辞書を返す。
+#   エラー発生時はログを記録したうえで例外を再送出する。
+#   FAILED 時は output_rows を 0、total_sales を 0 として記録する。
+#   これは処理全体が成功しなかったことを表すログ上の値であり、BigQueryに一切書き込まれていないことを保証するものではありません。
+
+from google.cloud import bigquery
+import pandas as pd
+from pandas.errors import MergeError
+import logging
+import json
+from datetime import datetime
+
+def run_final_sales_pipeline(project_id, dataset_id, sales_csv, products_csv, log_file):
+    # ログ用初期値
+    status = None
+    input_rows_sales = 0
+    input_rows_products = 0
+    output_rows = 0
+    total_sales = 0
+    executed_at = datetime.now().isoformat()
+    error = None
+
+    try:
+        # CSV読み
+        sales_df = pd.read_csv(sales_csv)
+        products_df = pd.read_csv(products_csv)
+        input_rows_sales += sales_df.shape[0]
+        input_rows_products += products_df.shape[0]
+
+        # 売上明細・商品マスタの必須列検証
+        required_sales_columns = ["sale_id", "sale_date", "product_id", "quantity", "unit_price"]
+        required_products_columns = ["product_id", "product_name", "category"]
+        shortage_sales_column = [rs_col for rs_col in required_sales_columns if rs_col not in sales_df.columns]
+        shortage_products_column = [rp_col for rp_col in required_products_columns if rp_col not in products_df.columns]
+        if shortage_sales_column:
+            raise ValueError(f"{sales_csv} の必須列不足: {shortage_sales_column}")
+        elif shortage_products_column:
+            raise ValueError(f"{products_csv} の必須列不足: {shortage_products_column}")
+
+        # 売上明細・商品マスタの必須列における欠損値検証
+        if sales_df[required_sales_columns].isna().any().any():  # 全体で「1つでもTrueがあるか」判定（最終的に1つの True/False）
+            raise ValueError(f"{sales_csv} の必須列に欠損値")
+        elif products_df[required_products_columns].isna().any().any():
+            raise ValueError(f"{products_csv} の必須列に欠損値")
+
+        # 売上明細のsale_id・商品マスタのproduct_idにおける重複検証
+        if sales_df.duplicated(subset=["sale_id"], keep=False).any():
+            raise ValueError(f"sale_id 重複")
+        elif products_df.duplicated(subset=["product_id"], keep=False).any():
+            raise ValueError(f"product_id 重複")
+
+        # sale_date を pd.to_datetime() で日付型に変換
+        sales_df["sale_date"] = pd.to_datetime(sales_df["sale_date"])
+
+        # 売上明細・商品マスタの結合
+        try:
+            join_table = sales_df.merge(
+                products_df,
+                on="product_id",
+                how="left",
+                validate="many_to_one",
+                indicator=True,
+            )
+        except MergeError as me:
+            raise ValueError(me) from me
+
+        # 商品マスタに一致しない売上明細があるか検証
+        not_match_row = join_table[
+            join_table["_merge"] == "left_only"
+            ]
+        if not not_match_row.empty:
+            raise ValueError(f"商品マスタに一致しない売上明細: {not_match_row}")
+
+        # 売上金額計算
+        join_table["sales_amount"] = join_table["quantity"] * join_table["unit_price"]
+
+        # product_id、product_name、category ごとに集計・並び替え
+        agg_sales = join_table.groupby(
+            ["product_id", "product_name", "category"],
+            as_index=False,
+        ).agg(
+            total_quantity=("quantity", "sum"),
+            total_sales=("sales_amount", "sum")
+        )
+        agg_sales = agg_sales.sort_values("product_id", ascending=True)
+        agg_sales = agg_sales.reset_index(drop=True)
+
+        # BigQuery接続・集計結果の保存用BigQueryテーブルID作成
+        client = bigquery.Client(project=project_id)
+        sales_summary_final_step7_id = f"{project_id}.{dataset_id}.sales_summary_final_step7"
+
+        # 集計結果を load_table_from_dataframe() でBigQueryのテーブルにWRITE_TRUNCATEで保存
+        load_truncate_job_config = bigquery.LoadJobConfig(
+            schema=[
+                bigquery.SchemaField("product_id", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("product_name", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("category", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("total_quantity", "INTEGER", mode="REQUIRED"),
+                bigquery.SchemaField("total_sales", "INTEGER", mode="REQUIRED"),
+            ],
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
+        )
+        load_truncate_job = client.load_table_from_dataframe(
+            agg_sales,
+            sales_summary_final_step7_id,
+            job_config=load_truncate_job_config
+        )
+        load_truncate_job.result()
+
+        # BigQueryの保存先テーブルからSQLで全行取得・DataFrame変換
+        verify_query_job = client.query(
+            f"""
+            SELECT
+              *
+            FROM `{sales_summary_final_step7_id}`;
+            """
+        )
+        verify_df = verify_query_job.result().to_dataframe(
+            create_bqstorage_client=False
+        )
+
+        # 保存結果の検証
+        if verify_df.shape[0] != agg_sales.shape[0]:
+            raise ValueError("保存結果の行数不一致")
+        elif verify_df["total_sales"].sum().item() != agg_sales["total_sales"].sum().item():
+            raise ValueError("保存結果の金額不一致")
+
+        # 正常時ログ記載用
+        status = "SUCCESS"
+        output_rows += agg_sales.shape[0]
+        total_sales += agg_sales["total_sales"].sum().item()
+
+    except Exception as e:
+        logging.error(e)
+        status = "FAILED"
+        error = str(e)
+        raise
+
+    finally:
+        log = {
+            "status": status,
+            "input_rows": {
+                "sales": input_rows_sales,
+                "products": input_rows_products
+            },
+            "output_rows": output_rows,
+            "total_sales": total_sales,
+            "executed_at": executed_at,
+            "error": error
+        }
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log, ensure_ascii=False) + "\n")
+
+    return log
+
+# テストケース
+# テスト①：正常系
+# 指定した2つのCSVを使用して関数を実行します。
+# 呼び出し例：
+result = run_final_sales_pipeline(
+    project_id="resonant-tract-508812-p9",
+    dataset_id="sql_training",
+    sales_csv="sales_final.csv",
+    products_csv="products_final.csv",
+    log_file="sales_final_log.jsonl"
+)
+print(result)
+# 期待する戻り値：
+# {
+#     "status": "SUCCESS",
+#     "input_rows": {
+#         "sales": 8,
+#         "products": 4
+#     },
+#     "output_rows": 4,
+#     "total_sales": 24000,
+#     "executed_at": "実行日時",
+#     "error": None
+# }
+# BigQuery側では、sales_summary_final_step7 に4行が保存されていることを確認します。
+# また、同じ正常系データで再実行した場合も、WRITE_TRUNCATE により結果が4行のままになる設計です。
+# 再実行の実測は今回の必須テストには含めません。
+
+# テスト②：異常系（商品マスタ未一致）
+# テスト①の正常終了後、売上CSVの8行目にある P004 を P999 に変更した別のCSVを用意します。
+# 変更後の該当行：
+# 7, 2026-11-04, P999, 3, 1500
+# それ以外の行は変更しません。
+# このCSVを入力して関数を実行します。
+# 期待する結果は次のとおりです。異常系で例外が発生すること自体が期待結果です。
+#   商品マスタに存在しない P999 が検出される。
+#   ValueError が発生する。
+#   JSONLログに FAILED が追記される。
+#   BigQueryへの保存処理は実行されない。
+#   テスト①で保存された4行の集計結果が維持される。
+sales_df = pd.read_csv("sales_final.csv")
+sales_final_invalid = sales_df.copy()
+sales_final_invalid.loc[
+    sales_final_invalid["sale_id"] == 7, "product_id"
+] = "P999"
+sales_final_invalid.to_csv("sales_final_invalid.csv", index=False)
+
+result = run_final_sales_pipeline(
+    project_id="resonant-tract-508812-p9",
+    dataset_id="sql_training",
+    sales_csv="sales_final_invalid.csv",
+    products_csv="products_final.csv",
+    log_file="sales_final_log.jsonl"
+)
+print(result)
+
+with open("sales_final_log.jsonl", "r", encoding="utf-8") as f:
+    for line in f:
+        print(json.loads(line))
 
 
 
