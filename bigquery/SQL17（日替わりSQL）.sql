@@ -542,4 +542,58 @@ FROM `resonant-tract-508812-p9.sql_training.sales_summary_final_step7`
 ORDER BY product_id;
 
 
+/*
+日替わりSQL｜BigQueryの列指向データウェアハウスに対する _TABLE_SUFFIX を使った参照カラム限定（スキャン量低減）
+
+GA4のイベントデータを使い、日付ごとのイベント発生状況を集計します。
+
+使用データ
+  bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*
+使用カラム
+  event_date      イベント発生日（YYYYMMDD形式）
+  event_name      イベント名
+  user_pseudo_id  ユーザー識別子
+  _TABLE_SUFFIX   ワイルドカードテーブルの日付部分
+
+今回は page_view、add_to_cart、purchase の3種類のイベントを対象にします。
+指定期間における日別のイベント発生状況を集計し、購入イベントが1件以上発生した日だけを抽出してください。
+
+以下の要件をすべて満たすSQLを作成してください。
+A. データ抽出
+  _TABLE_SUFFIX を使い、2021年1月1日〜1月7日のデータに限定する。
+   event_name が page_view、add_to_cart、purchase のいずれかであるレコードだけを対象にする。
+B. データ集計
+  event_date 単位で集計し、以下のカラムを出力する。
+  event_date    イベント発生日
+  page_views    page_view の発生件数
+  add_to_carts  add_to_cart の発生件数
+  purchases     purchase の発生件数
+  unique_users  対象3イベントにおける重複を除いたユーザー数
+C. 集計後の絞り込み
+  HAVING を使用し、purchase が1件以上発生した日だけを抽出する。
+D. 並び替え
+  event_date の昇順に並び替える。
+
+注意事項
+  COUNTIF() を使って各イベントの件数を求めてください。
+  unique_users はイベント件数ではなく、ユーザー識別子の重複を除いた数です。
+  WHERE と HAVING の役割の違いを意識してください。
+  purchase 以外のイベントも集計対象として残す必要があります。
+  今回はCTEやウィンドウ関数を使用する必要はありません。
+*/
+SELECT
+  event_date,
+  COUNTIF(event_name = 'page_view') AS page_views,
+  COUNTIF(event_name = 'add_to_cart') AS add_to_carts,
+  COUNTIF(event_name = 'purchase') AS purchases,
+  COUNT(DISTINCT user_pseudo_id) AS unique_users
+FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`
+WHERE _TABLE_SUFFIX BETWEEN '20210101' AND '20210107'
+  AND event_name IN ('page_view', 'add_to_cart', 'purchase')
+GROUP BY event_date
+HAVING purchases >= 1
+ORDER BY event_date ASC;
+
+
+
 
