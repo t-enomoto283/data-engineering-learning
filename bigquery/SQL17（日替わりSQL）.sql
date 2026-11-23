@@ -595,5 +595,137 @@ HAVING purchases >= 1
 ORDER BY event_date ASC;
 
 
+/*
+日替わりSQL｜PARSE_DATE() による文字列からDATE型への変換
+
+BigQueryのGA4公開サンプルデータを使用し、日別のカート追加イベント数・購入イベント数・購入率を算出します。
+
+対象テーブル
+  bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*
+対象期間
+  2021年1月1日〜2021年1月7日
+使用するカラム
+  event_date     イベント発生日（YYYYMMDD形式の文字列）
+  event_name     イベント名
+  _TABLE_SUFFIX  ワイルドカードテーブルの日付部分
+今回は add_to_cart と purchase の2種類のイベントのみを使用します。
+
+演習
+指定期間の日別カート追加イベント数と購入イベント数を集計し、購入イベント数をカート追加イベント数で割った割合を算出してください。
+以下の要件を満たすSQLを作成してください。
+A. データ抽出・日付変換
+  WITH 句を使用してCTE base を作成してください。
+  _TABLE_SUFFIX で2021年1月1日〜7日に限定する。
+  event_name が add_to_cart または purchase の行だけを抽出する。
+  PARSE_DATE('%Y%m%d', event_date) を使用して、event_date をDATE型に変換する。
+  CTE base の出力カラムは event_date（DATE型）、event_name とする。
+B. 日別集計
+  CTE daily_summary を作成し、base を日別に集計してください。
+  出力カラム     内容
+  event_date    DATE型の日付
+  add_to_carts  add_to_cart のイベント件数
+  purchases     purchase のイベント件数
+  イベント件数の算出には COUNTIF() を使用してください。
+C. 購入率の計算
+  最終的な SELECT で、次のカラムを追加してください。
+  出力カラム           内容
+  purchase_rate_pct  購入イベント数 ÷ カート追加イベント数 × 100
+  計算には SAFE_DIVIDE() を使用し、ROUND() で小数点以下2桁に丸めてください。
+  なお、カート追加イベント数が0の場合、purchase_rate_pct は NULL のままで構いません。
+D. 並び替え
+  event_date の昇順に並び替えてください。
+*/
+WITH base AS (
+  SELECT
+    PARSE_DATE('%Y%m%d', event_date) AS event_date,
+    event_name
+  FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`
+  WHERE _TABLE_SUFFIX BETWEEN '20210101' AND '20210107'
+    AND event_name IN ('add_to_cart', 'purchase')
+)
+SELECT
+  event_date,
+  COUNTIF(event_name = 'add_to_cart') AS add_to_carts,
+  COUNTIF(event_name = 'purchase') AS purchases,
+  ROUND(
+    SAFE_DIVIDE(
+      COUNTIF(event_name = 'purchase'), COUNTIF(event_name = 'add_to_cart')
+      ) * 100,
+    2
+  ) AS purchase_rate_pct
+FROM base
+GROUP BY event_date
+ORDER BY event_date ASC;
+
+
+/*
+日替わりSQL｜顧客別の最新注文と同順位の扱い
+
+ECサイトの注文履歴から、顧客ごとの最新注文を取得するSQLを作成してください。
+実務では、顧客マスタに最新の購入情報を付与したり、直近の購買状況を分析したりする場面があります。
+ただし、同じ顧客が同じ日に複数の注文を行っている場合、単純に最新日付だけで絞り込むと複数行が残ることがあります。
+今回は、そのようなケースも考慮し、顧客ごとに最新注文を必ず1件だけ取得することが要件です。
+
+使用するデータ
+今回は、BigQueryでそのまま実行できる小規模なサンプルデータを後述CTEとして使用、SQLの冒頭に記載。
+
+要件：顧客ごとに最新注文を1件取得し、次の条件を満たしてください。
+  最新注文は、order_date が最も新しい注文とする。
+  同一顧客で最新注文日が複数存在する場合は、order_id が最も大きい注文を採用する。
+  顧客ごとに必ず1行だけ出力する。
+  注文履歴に存在するすべての顧客を出力する。
+  結果は customer_id の昇順とする。
+
+出力するカラム
+  customer_id  顧客ID
+  order_id     最新注文の注文ID
+  order_date   最新注文日
+  amount       最新注文の金額
+
+補足
+今回の中心となる技術は、既習のウィンドウ関数です。
+例えば、ROW_NUMBER() を利用すれば顧客ごとの注文に順位を付けられ、またウィンドウ関数の計算結果に基づいて行を絞り込める QUALIFY 句もあります。
+*/
+WITH orders AS (
+  SELECT 101 AS order_id, 1 AS customer_id, DATE '2026-11-01' AS order_date, 3000 AS amount
+  UNION ALL
+  SELECT 102, 1, DATE '2026-11-10', 5000
+  UNION ALL
+  SELECT 103, 1, DATE '2026-11-10', 2000
+  UNION ALL
+  SELECT 104, 2, DATE '2026-11-03', 4000
+  UNION ALL
+  SELECT 105, 2, DATE '2026-11-15', 7000
+  UNION ALL
+  SELECT 106, 3, DATE '2026-11-05', 6000
+  UNION ALL
+  SELECT 107, 3, DATE '2026-11-05', 8000
+  UNION ALL
+  SELECT 108, 4, DATE '2026-11-08', 2500
+)
+SELECT
+  customer_id,
+  order_id,
+  order_date,
+  amount
+FROM (
+  SELECT
+    customer_id,
+    order_id,
+    order_date,
+    amount,
+    ROW_NUMBER() OVER (
+      PARTITION BY customer_id
+      ORDER BY order_date DESC, order_id DESC
+    ) AS ranked
+  FROM orders
+  QUALIFY ranked = 1
+  )
+ORDER BY customer_id ASC;
+
+
+
+
+
 
 
