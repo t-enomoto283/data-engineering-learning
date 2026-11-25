@@ -826,6 +826,103 @@ FROM (
 ORDER BY oct_total_amount DESC, customer_id ASC;
 
 
+/*
+日替わりSQL｜欠損日の補完と日次売上の前日比分析
+
+業務背景・目的
+ECサイトを運営する企業では、日次売上の推移を確認するためのダッシュボードを構築しています。
+しかし、注文データには購入実績のない日付のレコードが存在しません。
+そのまま日次集計を行うと、購入実績のない日付が欠落し、正確な前日比を算出できないという問題があります。
+そこで、購入実績のない日付も含めた連続的な日次売上データを作成し、前日の売上金額、前日との差額、前日比増減率を算出することになりました。
+
+使用するデータ
+後述するCTEをサンプルデータとして使用、SQLの冒頭に記載。
+
+業務要件
+以下の条件をすべて満たす日次売上データを作成してください。
+  集計対象期間は2026年11月1日〜11月7日とする。
+  売上として扱うのは order_status = 'Completed' の注文のみとする。
+  購入実績の有無にかかわらず、対象期間のすべての日付を出力する。
+  購入実績がない日の売上金額は0とする。
+  各日付について、前日の売上金額を取得する。
+  各日付について、前日との売上差額および前日比増減率（%）｛前日との売上差額/前日の売上金額×100｝を算出する。
+  集計対象期間の初日は、前日の売上金額・売上差額・前日比増減率をすべてNULLとする。
+  前日の売上金額が0の場合、前日比増減率はNULLとする。
+  前日比増減率は小数点以下第2位までとする。
+  1日につき1レコードとし、日付の昇順で並び替える。
+  なお、前日とは、直前に購入実績があった日ではなく、暦上の前日を意味します。
+
+出力カラム
+  sales_date         集計対象日（DATE型）
+  daily_sales        当日の売上金額
+  prev_daily_sales   前日の売上金額
+  sales_diff         前日との売上差額
+  sales_change_pct   前日比増減率（%）
+*/
+WITH orders AS (
+  SELECT 101 AS order_id, DATE '2026-11-01' AS order_date, 3000 AS amount, 'Completed' AS order_status
+  UNION ALL
+  SELECT 102, DATE '2026-11-01', 2000, 'Completed'
+  UNION ALL
+  SELECT 103, DATE '2026-11-02', 7500, 'Completed'
+  UNION ALL
+  SELECT 104, DATE '2026-11-03', 4000, 'Cancelled'
+  UNION ALL
+  SELECT 105, DATE '2026-11-04', 6000, 'Completed'
+  UNION ALL
+  SELECT 106, DATE '2026-11-04', 3000, 'Completed'
+  UNION ALL
+  SELECT 107, DATE '2026-11-05', 4500, 'Completed'
+  UNION ALL
+  SELECT 108, DATE '2026-11-07', 8000, 'Completed'
+  UNION ALL
+  SELECT 109, DATE '2026-11-08', 5000, 'Completed'
+),
+daily AS (
+  SELECT
+    sales_date
+  FROM UNNEST (
+    GENERATE_DATE_ARRAY(
+      DATE '2026-11-01',
+      DATE '2026-11-07',
+      INTERVAL 1 DAY
+    )
+  ) AS sales_date
+),
+joined AS (
+  SELECT
+    d.sales_date,
+    SUM(IFNULL(o.amount, 0)) AS daily_sales
+  FROM daily AS d
+  LEFT OUTER JOIN orders AS o
+    ON d.sales_date = o.order_date
+      AND o.order_status = 'Completed'
+  GROUP BY d.sales_date
+)
+SELECT
+  sales_date,
+  daily_sales,
+  prev_daily_sales,
+  daily_sales - prev_daily_sales AS sales_diff,
+  ROUND(
+    SAFE_DIVIDE(daily_sales - prev_daily_sales, prev_daily_sales) * 100,
+    2
+  ) AS sales_change_pct
+FROM (
+  SELECT
+    sales_date,
+    daily_sales,
+    LAG(daily_sales) OVER (
+      ORDER BY sales_date ASC
+    ) AS prev_daily_sales
+  FROM joined
+  )
+ORDER BY sales_date ASC;
+
+
+
+
+
 
 
 
