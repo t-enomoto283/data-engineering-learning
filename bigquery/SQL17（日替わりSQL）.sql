@@ -724,6 +724,110 @@ FROM (
 ORDER BY customer_id ASC;
 
 
+/*
+日替わりSQL｜特定期間に購入実績のない顧客の抽出
+
+業務背景・目的
+ECサイトを運営する企業では、既存顧客に対する購入促進施策を検討しています。
+2026年10月には購入実績があるものの、2026年11月には購入実績がない有効顧客を抽出し、施策対象者の一覧を作成することになりました。
+対象顧客については、10月の購入件数と購入金額の合計も取得してください。
+
+使用するデータ
+後述するCTEをサンプルデータとして使用、SQLの冒頭に記載。
+
+業務要件
+以下の条件をすべて満たす顧客を抽出してください。
+  顧客ステータスが Active であること。
+  2026年10月に1件以上の購入実績があること。
+  2026年11月に購入実績がないこと。
+  購入実績として扱うのは、order_status = 'Completed' の注文のみとすること。
+  対象顧客ごとに、2026年10月の購入件数と購入金額の合計を算出すること。
+  顧客1人につき1レコードとすること。
+  10月の購入金額の降順、同額の場合は customer_id の昇順で並び替えること。
+  なお、2026年12月以降の購入実績は、今回の抽出条件および集計結果に影響させないでください。
+
+出力カラム
+  customer_id、oct_order_count 2026年10月の購入件数、oct_total_amount	2026年10月の購入金額の合計
+
+今回のポイントは、購入実績がないことと、注文データ自体が存在しないことを区別することです。
+実務における休眠顧客の抽出だけでなく、未処理データの特定、テーブル間の差分検出、データ品質検証などにも応用できる技術の復習です。
+*/
+WITH customers AS (
+  SELECT 1 AS customer_id, 'Active' AS status
+  UNION ALL
+  SELECT 2, 'Active'
+  UNION ALL
+  SELECT 3, 'Active'
+  UNION ALL
+  SELECT 4, 'Inactive'
+  UNION ALL
+  SELECT 5, 'Active'
+  UNION ALL
+  SELECT 6, 'Active'
+  UNION ALL
+  SELECT 7, 'Active'
+),
+orders AS (
+  SELECT 101 AS order_id, 1 AS customer_id, DATE '2026-10-05' AS order_date, 3000 AS amount, 'Completed' AS order_status
+  UNION ALL
+  SELECT 102, 1, DATE '2026-10-20', 5000, 'Completed'
+  UNION ALL
+  SELECT 103, 2, DATE '2026-10-10', 4000, 'Completed'
+  UNION ALL
+  SELECT 104, 2, DATE '2026-11-05', 6000, 'Completed'
+  UNION ALL
+  SELECT 105, 3, DATE '2026-10-15', 7000, 'Completed'
+  UNION ALL
+  SELECT 106, 3, DATE '2026-11-10', 2000, 'Cancelled'
+  UNION ALL
+  SELECT 107, 4, DATE '2026-10-08', 9000, 'Completed'
+  UNION ALL
+  SELECT 108, 5, DATE '2026-11-12', 3000, 'Completed'
+  UNION ALL
+  SELECT 109, 6, DATE '2026-10-25', 4000, 'Cancelled'
+  UNION ALL
+  SELECT 110, 7, DATE '2026-10-31', 7000, 'Completed'
+  UNION ALL
+  SELECT 111, 7, DATE '2026-12-01', 5000, 'Completed'
+),
+joined AS (
+  SELECT
+    c.customer_id,
+    o.order_id,
+    DATE_TRUNC(o.order_date, MONTH) AS order_date,
+    o.amount
+  FROM customers AS c
+  INNER JOIN orders AS o
+    ON c.customer_id = o.customer_id
+  WHERE c.status = 'Active'
+    AND o.order_status = 'Completed'
+    AND (o.order_date >= DATE '2026-10-01' AND o.order_date < DATE '2026-12-01')
+)
+SELECT
+  customer_id,
+  oct_order_count,
+  oct_total_amount
+FROM (
+  SELECT
+    customer_id,
+    COUNTIF(order_date = DATE '2026-10-01') AS oct_order_count,
+    COUNTIF(order_date = DATE '2026-11-01') AS nov_order_count,
+    SUM(
+      CASE
+        WHEN order_date = DATE '2026-10-01' THEN amount
+        ELSE NULL  -- SUM(IF(…))ではなく意図的にCASE式かつELSE句を明示的に使用
+      END
+    ) AS oct_total_amount
+  FROM joined
+  GROUP BY customer_id
+  HAVING oct_order_count >= 1
+    AND nov_order_count = 0
+  )
+ORDER BY oct_total_amount DESC, customer_id ASC;
+
+
+
+
 
 
 
