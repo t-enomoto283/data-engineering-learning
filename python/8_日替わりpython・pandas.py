@@ -283,31 +283,126 @@ print(summarize_sales(
 # 例外メッセージの全文は、pandasのバージョンによって異なっても構いません。
 
 
+### 日替わりPython・pandas｜ウォーターマークによる差分データの抽出と更新候補の算出
+# 売上データと前回処理時点のウォーターマークを受け取り、新たに処理すべき売上データを抽出する関数を実装してください。
+# また、差分データから次回のウォーターマークとなる候補値を算出してください。
+# 今回は、実際にBigQueryへ接続するのではなく、既存の差分処理パイプラインを構成する個別処理の復習とします。
+#
+#   関連技術	        用途
+#   pd.Timestamp()	日時型の値の取り扱い
+#   ブールインデックス	条件に合致するレコードの抽出
+#   .copy()	        元データから独立したDataFrameの作成
+#   .empty	        空のDataFrameの判定
+#   .max()	        最大日時の取得
+#   len()	        レコード件数の取得
+#   辞書	            複数の処理結果の管理
+#
+# 使用するデータ
+# 以下のコードをテストデータとしてください。
+import pandas as pd
+df_sales = pd.DataFrame({
+    "order_id": [101, 102, 103, 104, 105, 106],
+    "amount": [3000, 5000, 2000, 4000, 7000, 6000],
+    "updated_at": pd.to_datetime([
+        "2026-11-20 09:00:00",
+        "2026-11-21 10:00:00",
+        "2026-11-22 12:00:00",
+        "2026-11-23 09:00:00",
+        "2026-11-24 10:00:00",
+        "2026-11-25 08:00:00"
+    ])
+})
+watermark = pd.Timestamp("2026-11-22 12:00:00")
+
+# 実装要件
+# A. 関数の定義
+#   以下の関数を定義してください。
+#     def extract_increment(df_sales, watermark):
+#     引数        内容
+#     df_sales   売上データのDataFrame
+#     watermark  現在のウォーターマーク（Timestamp型）
+#   引数として渡された元のDataFrameは変更しないでください。
+# B. 差分データの抽出
+#   updated_at が現在のウォーターマークより新しいレコードのみを抽出してください。
+#   抽出条件は以下のとおりです。
+#     updated_at > watermark
+#   ウォーターマークと同一日時のレコードは処理済みとみなし、抽出対象に含めないでください。
+#   抽出したDataFrameは、updated_at の昇順に並び替え、インデックスを0から振り直してください。
+# C. 次回のウォーターマーク候補の算出
+#   差分データの有無によって、以下の処理を行ってください。
+#     条件                 ウォーターマーク候補
+#     差分データが存在する    差分データの updated_at の最大値
+#     差分データが存在しない  引数で受け取った現在のウォーターマーク
+#   ウォーターマーク候補はTimestamp型のままとしてください。
+# D. 戻り値の作成
+#   以下の構造を持つ辞書を戻り値としてください。
+# {
+#     "increment_data": ...,
+#     "row_count": ...,
+#     "next_watermark": ...
+# }
+#   キー	             格納する値	            型
+#   increment_data	抽出した差分データ	        DataFrame
+#   row_count       差分データの件数	        int
+#   next_watermark	次回のウォーターマーク候補	Timestamp
+#   差分データが存在しない場合も、increment_data には元のカラム構成を維持した空のDataFrameを格納してください。
+
+def extract_increment(df_sales, watermark):
+    incremental_df = df_sales[
+        df_sales["updated_at"] > watermark
+        ].copy()
+    incremental_df = incremental_df.sort_values(by="updated_at", ascending=True)
+    incremental_df = incremental_df.reset_index(drop=True)
+
+    if not incremental_df.empty:
+        new_watermark = incremental_df["updated_at"].max()
+    else:
+        new_watermark = watermark
+
+    return {
+        "increment_data": incremental_df,
+        "row_count": len(incremental_df),
+        "next_watermark": new_watermark
+    }
+
+# テスト実行
+# テスト①：差分データが存在する場合
+result = extract_increment(
+    df_sales=df_sales,
+    watermark=watermark
+)
+print(result["increment_data"])
+print(result["row_count"])
+print(result["next_watermark"])
+# 期待される結果：
+#   index	order_id	amount	updated_at
+#   0	    104	        4000	2026-11-23 09:00:00
+#   1	    105	        7000	2026-11-24 10:00:00
+#   2	    106	        6000	2026-11-25 08:00:00
+#
+#   3
+#   2026-11-25 08:00:00
+
+# テスト②：差分データが存在しない場合
+# テスト①で算出されたウォーターマーク候補を使用して、同じ売上データに対して再度関数を実行してください。
+result2 = extract_increment(
+    df_sales=df_sales,
+    watermark=result["next_watermark"]
+)
+print(result2["increment_data"])
+print(result2["row_count"])
+print(result2["next_watermark"])
+# 期待される結果：
+#   Empty DataFrame
+#   Columns: [order_id, amount, updated_at]
+#   Index: []
+#
+#   0
+#   2026-11-25 08:00:00
+# 差分データが存在しない場合に、ウォーターマーク候補が None や NaT にならないことを確認してください。
+
+
 ### 日替わりPython・pandas｜
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
