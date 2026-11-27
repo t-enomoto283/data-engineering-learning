@@ -402,43 +402,245 @@ print(result2["next_watermark"])
 # 差分データが存在しない場合に、ウォーターマーク候補が None や NaT にならないことを確認してください。
 
 
-### 日替わりPython・pandas｜
+### 日替わりPython・pandas｜増分データのBigQueryへの格納とウォーターマークの更新
+# BigQuery上の状態管理テーブルからウォーターマークを取得し、売上データの増分抽出・格納・ウォーターマークの更新を行うパイプラインを実装。
+# 今回はSTEP7で作成した既存のBigQueryテーブルを使用します。
+#
+# 使用データ
+# 売上データ
+import pandas as pd
+df_sales = pd.DataFrame({
+    "sale_id": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    "sale_date": pd.to_datetime([
+        "2026-11-01",
+        "2026-11-01",
+        "2026-11-02",
+        "2026-11-02",
+        "2026-11-03",
+        "2026-11-03",
+        "2026-11-04",
+        "2026-11-04",
+        "2026-11-05",
+        "2026-11-06"
+    ]).date,
+    "product_id": ["P001", "P002", "P001", "P003", "P002", "P003", "P001", "P002", "P003", "P001"],
+    "quantity": [2, 1, 3, 2, 2, 4, 2, 3, 1, 5],
+    "unit_price": [1200, 2500, 1200, 800, 2500, 800, 1200, 2500, 800, 1200]
+})
+# BigQuery：状態管理テーブル
+state_table_id = "resonant-tract-508812-p9.sql_training.pipeline_watermarks_step7"
+# 現在の状態：
+#   pipeline_name	        watermark
+#   inventory_incremental	2026-11-05
+#   sales_incremental	    2026-11-03
+# BigQuery：増分売上テーブル
+sales_table_id = "resonant-tract-508812-p9.sql_training.sales_incremental_step7"
+# 現在の状態：
+#   sale_id	sale_date	product_id	quantity	unit_price
+#   1	    2026-11-01	P001	    2	        1200
+#   2	    2026-11-01	P002    	1	        2500
+#   3	    2026-11-02	P001	    3	        1200
+#   4	    2026-11-02	P003	    2	        800
+#   5	    2026-11-03	P002	    2	        2500
+#   6	    2026-11-03	P003	    4	        800
 
+# 作成する関数
+# def run_incremental_pipeline(df_sales, pipeline_name, state_table_id, sales_table_id):
+#   df_sales	    処理対象の売上DataFrame
+#   pipeline_name	対象パイプライン名
+#   state_table_id	状態管理テーブルの完全修飾名
+#   sales_table_id	増分売上テーブルの完全修飾名
 
+# 実装仕様
+# A. ウォーターマークの取得・増分データの抽出
+#   BigQuery上の状態管理テーブルをDataFrameとして取得する。
+#   pipeline_name に該当するウォーターマークを取得する。
+#   対象のパイプラインが存在しない場合はエラーとする。
+#   sale_date > watermark を満たすデータを抽出する。
+#   sale_date の昇順に並べ替え、インデックスを振り直す。
+#   増分データの件数を取得する。
+#   増分データの sale_date の最大値を次回のウォーターマーク候補とする。
+#   増分データが0件の場合は、仕様B・Cを実行せず、正常終了とする。
+# B. 増分データの格納
+#   仕様Aで抽出した増分データをBigQuery上の増分売上テーブルに格納する。
+#   書き込み方式は WRITE_APPEND とする。
+#   既存の売上データは保持する。
+#   ロードジョブの正常完了を確認する。
+#   格納処理でエラーが発生した場合は、仕様Cを実行せずに異常終了とする。
+# C. ウォーターマークの更新
+#   仕様Bが正常に完了した場合のみ実行する。
+#   仕様Aで取得した状態管理DataFrameを使用する。
+#   対象の pipeline_name に該当するウォーターマークのみを更新する。
+#   その他のパイプラインのウォーターマークは変更しない。
+#   状態管理DataFrame全体を WRITE_TRUNCATE でBigQueryに格納する。
+#   ロードジョブの正常完了を確認する。
+#   更新処理でエラーが発生した場合は異常終了とする。
+#
+# 戻り値
+# 以下の形式で辞書を返してください。
+# {
+#     "status": "OK",
+#     "row_count": 4,
+#     "previous_watermark": ...,
+#     "next_watermark": ...
+# }
+#   キー	内容
+#   status	            OK または ERROR
+#   row_count	        抽出した増分データの件数
+#   previous_watermark	処理開始時のウォーターマーク
+#   next_watermark	    正常終了後のウォーターマーク
+# 増分データが0件の場合、next_watermark は現在のウォーターマークと同じ値とします。
+# 異常終了の場合、status は ERROR、next_watermark は None とします。
+# ウォーターマーク取得前にエラーが発生した場合は、previous_watermark を None、件数取得前であれば row_count を 0 としてください。
 
+import pandas as pd
+from google.cloud import bigquery
+from google.cloud.exceptions import GoogleCloudError
 
+def run_incremental_pipeline(df_sales, pipeline_name, state_table_id, sales_table_id):
+    row_count = 0
+    previous_watermark = None
+    try:
+        client = bigquery.Client(
+            project="resonant-tract-508812-p9"
+        )
+        watermark_query_job = client.query(
+            f"""
+            SELECT
+              pipeline_name,
+              watermark
+            FROM `{state_table_id}`
+            """
+        )
+        watermark_df = watermark_query_job.result().to_dataframe(
+            create_bqstorage_client=False
+        )
+        watermark_df["watermark"] = pd.to_datetime(watermark_df["watermark"]).dt.date
+        pipeline_name_watermark = watermark_df[
+            watermark_df["pipeline_name"] == pipeline_name
+            ]
+        if pipeline_name_watermark.empty:
+            raise ValueError(f"指定されたパイプライン '{pipeline_name}' は存在しません。")
+        else:
+            pipeline_name_watermark = pipeline_name_watermark.iloc[0]
+            previous_watermark = pipeline_name_watermark["watermark"]
 
+        incremental_df = df_sales[
+            df_sales["sale_date"] > pipeline_name_watermark["watermark"]
+        ].copy()
+        if len(incremental_df) == 0:
+            return {
+                "status": "OK",
+                "row_count": 0,
+                "previous_watermark": pipeline_name_watermark["watermark"],
+                "next_watermark": pipeline_name_watermark["watermark"]
+            }
+        else:
+            incremental_df = incremental_df.sort_values(
+                by="sale_date",
+                ascending=True
+            )
+            incremental_df = incremental_df.reset_index(drop=True)
+            new_watermark = incremental_df["sale_date"].max()
+            row_count = incremental_df.shape[0]
 
+        load_append_job_config = bigquery.LoadJobConfig(
+            schema=[
+                bigquery.SchemaField("sale_id", "INTEGER", mode="REQUIRED"),
+                bigquery.SchemaField("sale_date", "DATE", mode="REQUIRED"),
+                bigquery.SchemaField("product_id", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("quantity", "INTEGER", mode="REQUIRED"),
+                bigquery.SchemaField("unit_price", "INTEGER", mode="REQUIRED")
+            ],
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND
+        )
+        load_append_job = client.load_table_from_dataframe(
+            incremental_df,
+            sales_table_id,
+            job_config=load_append_job_config
+        )
+        load_append_job.result()
 
+        watermark_df.loc[
+            watermark_df["pipeline_name"] == pipeline_name, "watermark"
+        ] = new_watermark
 
+        load_truncate_job_config = bigquery.LoadJobConfig(
+            schema=[
+                bigquery.SchemaField("pipeline_name", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("watermark", "DATE", mode="REQUIRED")
+            ],
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
+        )
+        load_truncate_job = client.load_table_from_dataframe(
+            watermark_df,
+            state_table_id,
+            job_config=load_truncate_job_config
+        )
+        load_truncate_job.result()
 
+        return {
+            "status": "OK",
+            "row_count": row_count,
+            "previous_watermark": previous_watermark,
+            "next_watermark": new_watermark
+        }
 
+    except (ValueError, GoogleCloudError):
+        return {
+            "status": "ERROR",
+            "row_count": row_count,
+            "previous_watermark": previous_watermark,
+            "next_watermark": None
+        }
 
+# 実行・期待結果
+# ケース①：増分データが存在する場合
+result = run_incremental_pipeline(
+    df_sales,
+    "sales_incremental",
+    "resonant-tract-508812-p9.sql_training.pipeline_watermarks_step7",
+    "resonant-tract-508812-p9.sql_training.sales_incremental_step7"
+)
+print(result)
+# 期待される増分データ：
+#   sale_id	sale_date	product_id	quantity	unit_price
+#   7	2026-11-04	P001	2	1200
+#   8	2026-11-04	P002	3	2500
+#   9	2026-11-05	P003	1	800
+#   10	2026-11-06	P001	5	1200
+# 期待される戻り値：
+# {
+#     "status": "OK",
+#     "row_count": 4,
+#     "previous_watermark": datetime.date(2026, 11, 3),
+#     "next_watermark": datetime.date(2026, 11, 6)
+# }
+# 期待される状態管理テーブル：
+#   pipeline_name	        watermark
+#   inventory_incremental	2026-11-05
+#   sales_incremental	    2026-11-06
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# ケース②：増分データが存在しない場合
+# ケース①の正常終了後、同じ引数で再度関数を実行してください。
+result2 = run_incremental_pipeline(
+    df_sales,
+    "sales_incremental",
+    "resonant-tract-508812-p9.sql_training.pipeline_watermarks_step7",
+    "resonant-tract-508812-p9.sql_training.sales_incremental_step7"
+)
+print(result2)
+# 期待される戻り値：
+# {
+#     "status": "OK",
+#     "row_count": 0,
+#     "previous_watermark": datetime.date(2026, 11, 6),
+#     "next_watermark": datetime.date(2026, 11, 6)
+# }
+# 期待される動作：
+#   増分売上テーブルへの書き込みなし。
+#   状態管理テーブルへの書き込みなし。
+#   増分売上テーブルの総件数は10件のまま。
 
 
 
