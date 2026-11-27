@@ -643,5 +643,318 @@ print(result2)
 #   増分売上テーブルの総件数は10件のまま。
 
 
+### 日替わりPython・pandas｜増分データの品質検証とBigQueryへの格納制御
+# 前問では、ウォーターマークを利用した増分データの抽出・格納・状態更新を実装しました。
+# 今回は、増分データに不正なレコードが含まれている場合に、BigQueryへの格納およびウォーターマークの更新を行わないパイプラインを実装。
+#
+# 使用データ
+import pandas as pd
+df_sales = pd.DataFrame({
+    "sale_id": [11, 12, 13, 14, 15],
+    "sale_date": pd.to_datetime(["2026-11-07", "2026-11-07", "2026-11-08", "2026-11-08", "2026-11-09"]).date,
+    "product_id": ["P001", "P002", None, "P003", "P001"],
+    "quantity": [2, 3, 1, -2, 4],
+    "unit_price": [1200, 2500, 800, 800, 1200]
+})
+# 既存テーブルの状態
+# pipeline_watermarks_step7
+#   pipeline_name	        watermark
+#   inventory_incremental	2026-11-05
+#   sales_incremental	    2026-11-06
+#
+# sales_incremental_step7
+# 前問で格納した sale_id が1～10のデータが存在している状態です。
+
+# 実装要件
+# 以下の関数を作成してください。
+# def run_validated_incremental_pipeline(df_sales, pipeline_name, state_table_id, sales_table_id):
+#
+# A. ウォーターマークの取得・増分データの抽出
+#   BigQueryから状態管理テーブルを取得する。
+#   指定された pipeline_name のウォーターマークを取得する。
+#   指定されたパイプラインが存在しない場合は異常終了とする。
+#   ウォーターマークより後の日付のデータを抽出する。
+#   sale_date の昇順でソートし、インデックスを振り直す。
+#   増分データの件数を取得する。
+#   増分データが0件の場合は、B・Cの処理を行わず正常終了とする。
+# B. 増分データの品質検証
+#   Aで抽出した増分データに対して、以下の検証を行ってください。
+#     検証対象      正常条件
+#     sale_id     欠損がなく、増分データ内で重複していない
+#     sale_date   欠損がない
+#     product_id  欠損がない
+#     quantity    欠損がなく、0より大きい
+#     unit_price  欠損がなく、0以上である
+#   いずれかの正常条件を満たさないレコードを不正レコードとします。
+#   不正レコードの件数を取得する。
+#   同一レコードが複数の正常条件に違反していても、1件としてカウントする。
+#   不正レコードが1件以上存在する場合は異常終了とする。
+#   異常終了時には、BigQueryへの増分データの格納およびウォーターマークの更新を行わない。
+#   不正レコードが0件の場合のみ、Cの処理へ進む。
+#   なお、今回の重複検証は増分データ内を対象とし、既存のBigQueryテーブルとの重複検証は対象外とします。
+#   また、sale_date の欠損によって増分抽出の対象外となったレコードについても、今回は検証対象外とします。
+# C. 増分データの格納・ウォーターマークの更新
+#   増分データの sale_date の最大値を更新候補として取得する。
+#   WRITE_APPEND によって増分データを格納する。
+#   ロードジョブの正常完了を確認する。
+#   増分データの格納が成功した場合のみ、対象パイプラインのウォーターマークを更新する。
+#   対象外のパイプラインのウォーターマークは変更しない。
+#   WRITE_TRUNCATE によって状態管理テーブルを更新する。
+#   ロードジョブの正常完了を確認する。
+# 戻り値
+# 以下の形式で辞書を返してください。
+# {
+#     "status": ...,
+#     "row_count": ...,
+#     "invalid_count": ...,
+#     "previous_watermark": ...,
+#     "next_watermark": ...
+# }
+#   キー	内容
+#   status	            正常終了時は OK、異常終了時は ERROR
+#   row_count	        抽出した増分データの件数
+#   invalid_count	    不正レコードの件数
+#   previous_watermark	更新前のウォーターマーク
+#   next_watermark      正常終了後のウォーターマーク
+# 異常終了時の next_watermark は None としてください。
+# 件数や更新前のウォーターマークについては、異常終了までに取得できた値を返してください。未取得の場合は、件数を 0、日付を None とします。
+# 日付の戻り値は前問と同様に datetime.date 型とします。
+
+import pandas as pd
+from google.cloud import bigquery
+from google.cloud.exceptions import GoogleCloudError
+
+def run_validated_incremental_pipeline(df_sales, pipeline_name, state_table_id, sales_table_id):
+    row_count = 0
+    invalid_count = 0
+    previous_watermark = None
+    try:
+        client = bigquery.Client(
+            project="resonant-tract-508812-p9",
+        )
+        watermark_query_job = client.query(
+            f"""
+            SELECT
+              pipeline_name,
+              watermark,
+            FROM `{state_table_id}`
+            """
+        )
+        watermark_df = watermark_query_job.result().to_dataframe(
+            create_bqstorage_client=False
+        )
+        watermark_df["watermark"] = pd.to_datetime(watermark_df["watermark"]).dt.date
+        pipeline_name_watermark = watermark_df[
+            watermark_df["pipeline_name"] == pipeline_name
+        ]
+        if pipeline_name_watermark.empty:
+            raise ValueError(f"指定されたパイプラインは存在しません: {pipeline_name}")
+        else:
+            pipeline_name_watermark = pipeline_name_watermark.iloc[0]
+            previous_watermark = pipeline_name_watermark["watermark"]
+
+        incremental_df = df_sales[
+            df_sales["sale_date"] > pipeline_name_watermark["watermark"]
+        ].copy()
+        if len(incremental_df) == 0:
+            return {
+                "status": "OK",
+                "row_count": row_count,
+                "invalid_count": invalid_count,
+                "previous_watermark": previous_watermark,
+                "next_watermark": previous_watermark
+            }
+        else:
+            incremental_df = incremental_df.sort_values(
+                by="sale_date",
+                ascending=True
+            )
+            incremental_df = incremental_df.reset_index(drop=True)
+            row_count = incremental_df.shape[0]
+
+        invalid_mask = (
+            incremental_df["sale_id"].isna()
+            | incremental_df.duplicated(subset=["sale_id"], keep=False)
+            | incremental_df["sale_date"].isna()
+            | incremental_df["product_id"].isna()
+            | incremental_df["quantity"].isna()
+            | (incremental_df["quantity"] <= 0)
+            | incremental_df["unit_price"].isna()
+            | (incremental_df["unit_price"] < 0)
+        )
+        invalid_count = int(invalid_mask.sum())
+        if invalid_count != 0:
+            raise ValueError
+        else:
+            new_watermark = incremental_df["sale_date"].max()
+            load_append_job_config = bigquery.LoadJobConfig(
+                schema=[
+                    bigquery.SchemaField("sale_id", "INTEGER", mode="REQUIRED"),
+                    bigquery.SchemaField("sale_date", "DATE", mode="REQUIRED"),
+                    bigquery.SchemaField("product_id", "STRING", mode="REQUIRED"),
+                    bigquery.SchemaField("quantity", "INTEGER", mode="REQUIRED"),
+                    bigquery.SchemaField("unit_price", "INTEGER", mode="REQUIRED"),
+                ],
+                write_disposition=bigquery.WriteDisposition.WRITE_APPEND
+            )
+            load_append_job = client.load_table_from_dataframe(
+                incremental_df,
+                sales_table_id,
+                job_config=load_append_job_config
+            )
+            load_append_job.result()
+
+            watermark_df.loc[
+                watermark_df["pipeline_name"] == pipeline_name, "watermark"
+            ] = new_watermark
+            load_truncate_job_config = bigquery.LoadJobConfig(
+                schema=[
+                    bigquery.SchemaField("pipeline_name", "STRING", mode="REQUIRED"),
+                    bigquery.SchemaField("watermark", "DATE", mode="REQUIRED")
+                ],
+                write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
+            )
+            load_truncate_job = client.load_table_from_dataframe(
+                watermark_df,
+                state_table_id,
+                job_config=load_truncate_job_config
+            )
+            load_truncate_job.result()
+
+        return {
+            "status": "OK",
+            "row_count": row_count,
+            "invalid_count": invalid_count,
+            "previous_watermark": previous_watermark,
+            "next_watermark": new_watermark
+        }
+
+    except (ValueError, GoogleCloudError):
+        return {
+            "status": "ERROR",
+            "row_count": row_count,
+            "invalid_count": invalid_count,
+            "previous_watermark": previous_watermark,
+            "next_watermark": None
+        }
+
+# 実行ケース
+# ケース①：不正レコードが存在する場合
+# 提示した df_sales をそのまま使用します。
+# 期待する戻り値：
+# {
+#     "status": "ERROR",
+#     "row_count": 5,
+#     "invalid_count": 2,
+#     "previous_watermark": datetime.date(2026, 11, 6),
+#     "next_watermark": None
+# }
+# BigQuery上の期待する状態：
+#   確認項目	                期待値
+#   増分売上テーブルの総件数	    10件
+#   sales_incremental	    2026-11-06
+#   inventory_incremental	2026-11-05
+result1 = run_validated_incremental_pipeline(
+    df_sales,
+    "sales_incremental",
+    "resonant-tract-508812-p9.sql_training.pipeline_watermarks_step7",
+    "resonant-tract-508812-p9.sql_training.sales_incremental_step7"
+)
+print(result1)
+
+# ケース②：不正レコードを修正した場合
+df_sales_corrected = df_sales.copy()
+df_sales_corrected.loc[
+    df_sales_corrected["sale_id"] == 13, "product_id"
+] = "P003"
+df_sales_corrected.loc[
+    df_sales_corrected["sale_id"] == 14, "quantity"
+] = 2
+
+result2 = run_validated_incremental_pipeline(
+    df_sales_corrected,
+    "sales_incremental",
+    "resonant-tract-508812-p9.sql_training.pipeline_watermarks_step7",
+    "resonant-tract-508812-p9.sql_training.sales_incremental_step7"
+)
+print(result2)
+
+# 期待する戻り値：
+# {
+#     "status": "OK",
+#     "row_count": 5,
+#     "invalid_count": 0,
+#     "previous_watermark": datetime.date(2026, 11, 6),
+#     "next_watermark": datetime.date(2026, 11, 9)
+# }
+# BigQuery上の期待する状態：
+#   確認項目	                期待値
+#   増分売上テーブルの総件数     15件
+#   sales_incremental       2026-11-09
+#   inventory_incremental	2026-11-05
+
+# ケース③：ケース②のデータを再実行した場合
+# 期待する戻り値：
+# {
+#     "status": "OK",
+#     "row_count": 0,
+#     "invalid_count": 0,
+#     "previous_watermark": datetime.date(2026, 11, 9),
+#     "next_watermark": datetime.date(2026, 11, 9)
+# }
+# BigQuery上のデータおよびウォーターマークには、変更がないことを期待します。
+result3 = run_validated_incremental_pipeline(
+    df_sales_corrected,
+    "sales_incremental",
+    "resonant-tract-508812-p9.sql_training.pipeline_watermarks_step7",
+    "resonant-tract-508812-p9.sql_training.sales_incremental_step7"
+)
+print(result3)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
