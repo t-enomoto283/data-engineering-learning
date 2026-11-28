@@ -1013,6 +1013,119 @@ GROUP BY items.product_id
 ORDER BY total_sales DESC;
 
 
+/*
+日替わりSQL｜注文内の商品明細の順序と注文単位の情報管理
+
+業務背景
+ECサイトの運営担当者から、注文ごとの商品明細を確認できるデータを作成してほしいという依頼がありました。
+商品明細は注文時の登録順に配列として格納されています。
+また、データ品質の確認も目的としているため、商品明細が登録されていない注文についても確認できる必要があります。
+商品明細の情報に加え、注文全体の明細数・売上金額も確認できるデータを作成してください。
+
+要件
+  商品明細1件につき1レコードを出力すること。
+  商品明細が存在しない注文についても、1レコードを出力すること。
+  注文内の商品明細の登録順を、1から始まる連番として取得すること。
+  同一注文内に同じ商品が複数存在する場合でも、それぞれ独立した明細として扱うこと。
+  商品明細ごとの売上金額を取得すること。
+  注文単位の商品明細数を取得すること。
+  注文単位の総売上金額を取得すること。
+  商品明細が存在しない注文については、明細番号・商品ID・購入数量・商品単価・明細売上金額をNULLとすること。
+  商品明細が存在しない注文については、注文単位の商品明細数・総売上金額を0とすること。
+  注文IDの昇順、同一注文内では明細番号の昇順で出力すること。
+
+出力カラム
+  order_id：注文ID
+  order_date：注文日
+  customer_id：顧客ID
+  item_number：注文内の商品明細番号
+  product_id：商品ID
+  quantity：購入数量
+  unit_price：商品単価
+  item_sales：商品明細の売上金額
+  order_item_count：注文内の商品明細数
+  order_total_sales：注文単位の総売上金額
+
+使用データ
+後述のCTEを仮想データとしてSQL冒頭に使用。
+*/
+WITH orders AS (
+  SELECT
+    1001 AS order_id,
+    DATE '2026-11-01' AS order_date,
+    'C001' AS customer_id,
+    [
+      STRUCT('P001' AS product_id, 2 AS quantity, 1200 AS unit_price),
+      STRUCT('P002' AS product_id, 1 AS quantity, 2500 AS unit_price)
+    ] AS items
+  UNION ALL
+  SELECT
+    1002,
+    DATE '2026-11-01',
+    'C002',
+    [
+      STRUCT('P003', 2, 800),
+      STRUCT('P001', 3, 1200),
+      STRUCT('P002', 1, 2500)
+    ]
+  UNION ALL
+  SELECT
+    1003,
+    DATE '2026-11-02',
+    'C001',
+    ARRAY<STRUCT<product_id STRING, quantity INT64, unit_price INT64>>[]
+  UNION ALL
+  SELECT
+    1004,
+    DATE '2026-11-02',
+    'C003',
+    [
+      STRUCT('P002', 2, 2500)
+    ]
+  UNION ALL
+  SELECT
+    1005,
+    DATE '2026-11-03',
+    'C002',
+    [
+      STRUCT('P001', 1, 1200),
+      STRUCT('P003', 3, 800),
+      STRUCT('P001', 2, 1200)
+    ]
+  UNION ALL
+  SELECT
+    1006,
+    DATE '2026-11-03',
+    'C004',
+    ARRAY<STRUCT<product_id STRING, quantity INT64, unit_price INT64>>[]
+)
+SELECT
+  order_id,
+  order_date,
+  customer_id,
+  item_number + 1 AS item_number,
+  i.product_id,
+  i.quantity,
+  i.unit_price,
+  SUM(i.quantity * i.unit_price) OVER (
+    PARTITION BY order_id, item_number
+  ) AS item_sales,
+  COUNT(item_number) OVER (
+    PARTITION BY order_id
+  ) AS order_item_count,
+  COALESCE(
+    SUM(i.quantity * i.unit_price) OVER (
+      PARTITION BY order_id
+      ),
+    0
+  ) AS order_total_sales,
+FROM orders
+LEFT OUTER JOIN UNNEST(items) AS i
+  WITH OFFSET AS item_number
+  ON TRUE
+ORDER BY order_id ASC, item_number ASC;
+
+
 
 
 
