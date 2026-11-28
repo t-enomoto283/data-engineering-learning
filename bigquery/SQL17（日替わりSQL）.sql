@@ -920,6 +920,98 @@ FROM (
 ORDER BY sales_date ASC;
 
 
+/*
+日替わりSQL｜注文データに含まれる商品明細の集計
+
+使用データ
+仮想のECサイトの注文データです。
+1レコードが1注文を表しており、注文内の商品明細は配列として格納されています。
+後述するCTEを使用、SQLの冒頭に記載。
+
+業務背景
+ECサイトの運営担当者から、商品ごとの販売実績を把握したいという依頼がありました。
+注文データには複数の商品明細が含まれており、同一注文内に同じ商品が複数の明細として存在する場合もあります。
+商品単位で販売実績を集計し、売上金額の大きい商品を確認できるデータを作成してください。
+
+要件
+  商品ID単位で集計すること。
+  商品ごとの総販売数量を取得すること。
+  商品ごとの総売上金額を取得すること。
+  商品ごとの注文数を取得すること。
+  商品ごとの購入顧客数を取得すること。
+  同一注文内に同じ商品が複数存在する場合、販売数量・売上金額はすべての明細を集計すること。
+  同一注文内に同じ商品が複数存在する場合でも、注文数は1件として扱うこと。
+  同一顧客が同じ商品を複数回購入した場合でも、購入顧客数は1人として扱うこと。
+  商品明細が存在しない注文は集計対象外とすること。
+  総売上金額の降順で出力すること。
+
+出力カラム
+  product_id 商品ID、total_quantity	総販売数量、total_sales	総売上金額、order_count	注文数、customer_count 購入顧客数
+*/
+WITH orders AS (
+  SELECT
+    1001 AS order_id,
+    DATE '2026-11-01' AS order_date,
+    'C001' AS customer_id,
+    [
+      STRUCT('P001' AS product_id, 2 AS quantity, 1200 AS unit_price),
+      STRUCT('P002' AS product_id, 1 AS quantity, 2500 AS unit_price)
+    ] AS items
+  UNION ALL
+  SELECT
+    1002,
+    DATE '2026-11-01',
+    'C002',
+    [
+      STRUCT('P001', 3, 1200),
+      STRUCT('P003', 2, 800)
+    ]
+  UNION ALL
+  SELECT
+    1003,
+    DATE '2026-11-02',
+    'C001',
+    [
+      STRUCT('P002', 2, 2500),
+      STRUCT('P003', 1, 800)
+    ]
+  UNION ALL
+  SELECT
+    1004,
+    DATE '2026-11-02',
+    'C003',
+    [
+      STRUCT('P001', 1, 1200),
+      STRUCT('P001', 2, 1200),
+      STRUCT('P003', 3, 800)
+    ]
+  UNION ALL
+  SELECT
+    1005,
+    DATE '2026-11-03',
+    'C002',
+    [
+      STRUCT('P002', 1, 2500),
+      STRUCT('P003', 4, 800)
+    ]
+  UNION ALL
+  SELECT
+    1006,
+    DATE '2026-11-03',
+    'C004',
+    ARRAY<STRUCT<product_id STRING, quantity INT64, unit_price INT64>>[]
+)
+SELECT
+  items.product_id AS product_id,
+  SUM(items.quantity) AS total_quantity,
+  SUM(items.quantity * items.unit_price) AS total_sales,
+  COUNT(DISTINCT order_id) AS order_count,
+  COUNT(DISTINCT customer_id) AS customer_count
+FROM orders
+CROSS JOIN UNNEST(items) AS items
+GROUP BY items.product_id
+ORDER BY total_sales DESC;
+
 
 
 
