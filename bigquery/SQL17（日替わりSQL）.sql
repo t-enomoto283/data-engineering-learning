@@ -1126,6 +1126,183 @@ LEFT OUTER JOIN UNNEST(items) AS i
 ORDER BY order_id ASC, item_number ASC;
 
 
+/*
+日替わりSQL｜顧客の月別購入状況と継続・離脱・復帰の判定
+
+使用データ
+後述のCTEを仮想データとしてSQL冒頭に使用。
+
+業務背景
+ECサイトの運営担当者から、顧客の月別の購入状況を把握したいという依頼がありました。
+単純な月別売上金額だけでなく、顧客が継続して購入しているのか、購入しなくなったのか、一度購入しなくなった後に再び購入したのかを確認したいと考えています。
+購入が発生していない月についてもデータを補完し、顧客ごとの購入状況を時系列で確認できるデータを作成してください。
+
+要件
+  集計対象期間は2026年7月〜10月とすること。
+  顧客ID × 月単位で1レコードを出力すること。
+  月は各月の1日を表すDATE型とすること。
+  購入が発生していない月についてもレコードを出力すること。
+  初回購入月より前の月は出力対象外とすること。
+  月別の注文数・売上金額を取得すること。
+  購入が発生していない月の注文数・売上金額は0とすること。
+  前月の売上金額を取得すること。
+  初回購入月の前月売上金額はNULLとすること。
+  初回購入月から当月までの累計売上金額を取得すること。
+  以下の判定条件に従い、各月の購入ステータスを取得すること。
+    NEW	初回購入月
+    CONTINUED	前月・当月ともに購入あり
+    CHURNED	前月購入あり当月購入なし
+    RETURNED 初回購入月より後で、前月は購入なし、当月は購入あり
+    INACTIVE 前月・当月ともに購入なし
+  購入の有無は売上金額ではなく、注文数によって判定してください。
+  なお、今回のデータにおける各顧客の最初の購入を、その顧客の初回購入として扱う。
+  顧客IDの昇順、月の昇順で出力すること。
+
+出力カラム
+  customer_id	顧客ID
+  target_month 対象月
+  order_count	月別注文数
+  monthly_sales	月別売上金額
+  previous_month_sales 前月売上金額
+  cumulative_sales 累計売上金額
+  customer_status	購入ステータス
+*/
+WITH orders AS (
+  SELECT 1001 AS order_id, 'C001' AS customer_id, DATE '2026-07-05' AS order_date, 3000 AS sales
+  UNION ALL
+  SELECT 1002, 'C001', DATE '2026-07-20', 2000
+  UNION ALL
+  SELECT 1003, 'C002', DATE '2026-07-10', 4000
+  UNION ALL
+  SELECT 1004, 'C001', DATE '2026-08-08', 6000
+  UNION ALL
+  SELECT 1005, 'C003', DATE '2026-08-15', 3500
+  UNION ALL
+  SELECT 1006, 'C003', DATE '2026-08-25', 1500
+  UNION ALL
+  SELECT 1007, 'C002', DATE '2026-09-03', 7000
+  UNION ALL
+  SELECT 1008, 'C003', DATE '2026-09-18', 2500
+  UNION ALL
+  SELECT 1009, 'C004', DATE '2026-09-22', 8000
+  UNION ALL
+  SELECT 1010, 'C001', DATE '2026-10-02', 4500
+  UNION ALL
+  SELECT 1011, 'C002', DATE '2026-10-12', 3000
+  UNION ALL
+  SELECT 1012, 'C002', DATE '2026-10-25', 2000
+  UNION ALL
+  SELECT 1013, 'C004', DATE '2026-10-28', 6000
+),
+monthly AS (
+  SELECT
+    target_month
+  FROM UNNEST (
+    GENERATE_DATE_ARRAY(
+      DATE '2026-07-01',
+      DATE '2026-10-01',
+      INTERVAL 1 MONTH
+    )
+  ) AS target_month
+),
+base AS (
+  SELECT
+    o.customer_id,
+    m.target_month
+  FROM (
+    SELECT
+      DISTINCT customer_id
+    FROM orders
+  ) AS o
+  CROSS JOIN monthly AS m
+),
+customer_monthly AS (
+  SELECT
+    b.customer_id,
+    b.target_month,
+    IFNULL(c.order_count, 0) AS order_count,
+    IFNULL(c.monthly_sales, 0) AS monthly_sales
+  FROM (
+    SELECT
+      customer_id,
+      order_date,
+      COUNT(order_id) AS order_count,
+      SUM(sales) AS monthly_sales
+    FROM (
+      SELECT
+        order_id,
+        customer_id,
+        DATE_TRUNC(order_date, MONTH) AS order_date,
+        sales
+      FROM orders
+      WHERE order_date >= DATE '2026-07-01' AND order_date < DATE '2026-11-01'
+    )
+    GROUP BY customer_id, order_date
+  ) AS c
+  RIGHT OUTER JOIN base AS b
+    ON b.customer_id = c.customer_id
+      AND b.target_month = c.order_date
+),
+first_purchase_month AS (
+  SELECT
+    customer_id,
+    target_month,
+    order_count,
+    monthly_sales
+  FROM (
+    SELECT
+      customer_id,
+      target_month,
+      order_count,
+      monthly_sales,
+      MIN(
+        CASE
+          WHEN order_count > 0 THEN target_month
+          ELSE NULL
+        END
+        ) OVER (
+        PARTITION BY customer_id
+      ) AS first_purchase_month
+    FROM customer_monthly
+  )
+  WHERE target_month >= first_purchase_month
+)
+SELECT
+  customer_id,
+  target_month,
+  order_count,
+  monthly_sales,
+  previous_month_sales,
+  cumulative_sales,
+  CASE
+    WHEN previous_order_count IS NULL AND order_count > 0 THEN 'NEW'
+    WHEN previous_order_count > 0 AND order_count > 0 THEN 'CONTINUED'
+    WHEN previous_order_count > 0 AND order_count = 0 THEN 'CHURNED'
+    WHEN previous_order_count = 0 AND order_count > 0 THEN 'RETURNED'
+    ELSE 'INACTIVE'
+  END AS customer_status
+FROM (
+  SELECT
+    customer_id,
+    target_month,
+    order_count,
+    LAG(order_count) OVER (
+      PARTITION BY customer_id
+      ORDER BY target_month ASC
+    ) previous_order_count,
+    monthly_sales,
+    LAG(monthly_sales) OVER (
+      PARTITION BY customer_id
+      ORDER BY target_month ASC
+    ) AS previous_month_sales,
+    SUM(monthly_sales) OVER (
+      PARTITION BY customer_id
+      ORDER BY target_month ASC
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS cumulative_sales
+  FROM first_purchase_month
+)
+ORDER BY customer_id ASC, target_month ASC;
 
 
 
